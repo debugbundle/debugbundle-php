@@ -1,0 +1,154 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable SDK version to release (for example 0.1.0)
+        required: true
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: composer:v2
+
+      - name: Resolve release version
+        id: release_version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+
+          if [[ -z "$version" ]]; then
+            echo "missing_version" >&2
+            exit 1
+          fi
+
+          if [[ "$version" == *-* ]]; then
+            echo "unexpected_prerelease_version:$version" >&2
+            exit 1
+          fi
+
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Validate Composer package metadata
+        run: composer validate --strict
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: PHPUnit
+        run: composer test
+
+      - name: PHPStan
+        run: composer typecheck
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.release_version.outputs.value }}
+          generate_release_notes: true
+
+      - name: Ensure Packagist credentials are configured
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${PACKAGIST_USERNAME:-}" ]]; then
+            echo "Missing PACKAGIST_USERNAME secret for Packagist release automation." >&2
+            exit 1
+          fi
+
+          if [[ -z "${PACKAGIST_API_TOKEN:-}" ]]; then
+            echo "Missing PACKAGIST_API_TOKEN secret for Packagist release automation." >&2
+            exit 1
+          fi
+        env:
+          PACKAGIST_USERNAME: ${{ secrets.PACKAGIST_USERNAME }}
+          PACKAGIST_API_TOKEN: ${{ secrets.PACKAGIST_API_TOKEN }}
+
+      - name: Notify Packagist of tagged release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          payload='{"repository":"https://github.com/debugbundle/debugbundle-php"}'
+          auth_header="Authorization: Bearer ${PACKAGIST_USERNAME}:${PACKAGIST_API_TOKEN}"
+
+          update_status="$(curl --show-error --silent --output /tmp/packagist-update-response.json --write-out '%{http_code}' \
+            -X POST \
+            -H 'Content-Type: application/json' \
+            -H "$auth_header" \
+            -d "$payload" \
+            'https://packagist.org/api/update-package')"
+
+          if [[ "$update_status" == "404" ]]; then
+            echo "Packagist package does not exist yet; creating it for the initial release."
+
+            create_status="$(curl --show-error --silent --output /tmp/packagist-create-response.json --write-out '%{http_code}' \
+              -X POST \
+              -H 'Content-Type: application/json' \
+              -H "$auth_header" \
+              -d "$payload" \
+              'https://packagist.org/api/create-package')"
+
+            if [[ "$create_status" != "200" && "$create_status" != "201" && "$create_status" != "202" ]]; then
+              cat /tmp/packagist-create-response.json >&2 || true
+              echo "Packagist create-package failed with HTTP ${create_status}." >&2
+              exit 1
+            fi
+          elif [[ "$update_status" != "200" && "$update_status" != "202" ]]; then
+            cat /tmp/packagist-update-response.json >&2 || true
+            echo "Packagist update-package failed with HTTP ${update_status}." >&2
+            exit 1
+          fi
+        env:
+          PACKAGIST_USERNAME: ${{ secrets.PACKAGIST_USERNAME }}
+          PACKAGIST_API_TOKEN: ${{ secrets.PACKAGIST_API_TOKEN }}
+
+      - name: Smoke test published Composer package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tmpdir="$(mktemp -d)"
+          cd "$tmpdir"
+
+          composer init --name debugbundle/release-smoke --no-interaction >/dev/null
+
+          for attempt in $(seq 1 30); do
+            if composer require debugbundle/sdk-php:${RELEASE_VERSION} --no-interaction --prefer-dist >/dev/null 2>&1; then
+              php -r 'require "vendor/autoload.php"; if (!class_exists("DebugBundle\\DebugBundle")) { fwrite(STDERR, "missing DebugBundle class\n"); exit(1); }'
+              exit 0
+            fi
+
+            if [[ "$attempt" == "30" ]]; then
+              composer require debugbundle/sdk-php:${RELEASE_VERSION} --no-interaction --prefer-dist
+              exit 1
+            fi
+
+            sleep 10
+          done
+        env:
+          RELEASE_VERSION: ${{ steps.release_version.outputs.value }}

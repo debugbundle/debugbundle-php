@@ -1,0 +1,54 @@
+{
+  "name": "debugbundle/sdk-php",
+  "description": "DebugBundle SDK for PHP",
+  "homepage": "https://debugbundle.com/docs/sdks/php",
+  "license": "AGPL-3.0-only",
+  "type": "library",
+  "support": {
+    "issues": "https://github.com/debugbundle/debugbundle-php/issues",
+    "source": "https://github.com/debugbundle/debugbundle-php"
+  },
+  "require": {
+    "php": ">=8.4",
+    "monolog/monolog": "^3.8"
+  },
+  "require-dev": {
+    "illuminate/config": "^11.0",
+    "illuminate/container": "^11.0",
+    "illuminate/http": "^11.0",
+    "illuminate/support": "^11.0",
+    "opis/json-schema": "^2.6",
+    "phpstan/phpstan": "^2.1",
+    "phpunit/phpunit": "^11.5",
+    "symfony/console": "^7.2",
+    "symfony/dependency-injection": "^7.2",
+    "symfony/event-dispatcher": "^7.2",
+    "symfony/http-foundation": "^7.2",
+    "symfony/http-kernel": "^7.2"
+  },
+  "autoload": {
+    "psr-4": {
+      "DebugBundle\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "DebugBundle\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "test": "phpunit --configuration phpunit.xml.dist",
+    "typecheck": "phpstan analyse --configuration phpstan.neon --memory-limit=512M"
+  },
+  "keywords": [
+    "debugbundle",
+    "debugging",
+    "ai-agent",
+    "error-tracking",
+    "php",
+    "laravel",
+    "symfony"
+  ],
+  "minimum-stability": "stable",
+  "prefer-stable": true
+}
