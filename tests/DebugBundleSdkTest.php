@@ -351,7 +351,7 @@ final class DebugBundleSdkTest extends TestCase
             $current->reset();
         }
 
-        $property->setValue($sdk);
+        $property->setValue(null, $sdk);
     }
 
     // ── Health status tests ──

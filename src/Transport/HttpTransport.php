@@ -27,16 +27,19 @@ final class HttpTransport implements TransportInterface
             ],
         ]);
 
-        try {
-            @file_get_contents($this->endpoint, false, $context);
-        } catch (\Throwable) {
+        $stream = @fopen($this->endpoint, 'rb', false, $context);
+        if ($stream === false) {
             return new TransportResponse(500, null);
         }
 
         $statusCode = 500;
         $retryAfterMs = null;
+        $metadata = stream_get_meta_data($stream);
+        @stream_get_contents($stream);
+        fclose($stream);
+        $responseHeaders = self::normalizeResponseHeaders($metadata['wrapper_data'] ?? []);
 
-        foreach ($http_response_header as $headerLine) {
+        foreach ($responseHeaders as $headerLine) {
             if (preg_match('/HTTP\/\d(?:\.\d)?\s+(\d+)/', $headerLine, $matches) === 1) {
                 $statusCode = (int) $matches[1];
                 continue;
@@ -51,5 +54,19 @@ final class HttpTransport implements TransportInterface
         }
 
         return new TransportResponse($statusCode, $retryAfterMs);
+    }
+
+    /** @return list<string> */
+    private static function normalizeResponseHeaders(mixed $headers): array
+    {
+        if (is_string($headers)) {
+            return [$headers];
+        }
+
+        if (is_array($headers)) {
+            return array_values(array_filter($headers, static fn (mixed $header): bool => is_string($header)));
+        }
+
+        return [];
     }
 }
