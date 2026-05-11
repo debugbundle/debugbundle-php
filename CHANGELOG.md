@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.1.1] - 2026-05-11
+## [0.1.2] - 2026-05-11
 
 ### Changed
 - Aligned PHP SDK capture-policy fallback defaults with the service presets so minimal and balanced modes capture 5xx request failures by default.
