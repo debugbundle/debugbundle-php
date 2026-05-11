@@ -104,6 +104,45 @@ final class RelayHandlerTest extends TestCase
         self::assertSame('frontend_exception', $acceptedBatch->events[0]['event_type']);
     }
 
+    public function testAcceptsBrowserRequestEventsForRequestFailureIncidents(): void
+    {
+        $acceptedBatch = null;
+        $handler = new BrowserRelayHandler([
+            'onAccept' => static function (BrowserRelayAcceptedBatch $batch) use (&$acceptedBatch): void {
+                $acceptedBatch = $batch;
+            },
+        ]);
+
+        $response = $handler->handle($this->createRequest([
+            'batch' => [[
+                'schema_version' => '2026-03-01',
+                'event_id' => '00000000-0000-4000-8000-000000000304',
+                'event_type' => 'request_event',
+                'occurred_at' => '2026-03-31T10:00:00Z',
+                'sdk_version' => '1.2.3',
+                'service' => ['name' => 'checkout-web', 'environment' => 'production'],
+                'payload' => [
+                    'method' => 'POST',
+                    'path' => '/v1/billing/checkout',
+                    'query' => ['plan' => 'team'],
+                    'headers' => [],
+                    'response_status' => 503,
+                    'duration_ms' => 84,
+                ],
+            ]],
+        ], [
+            'content-type' => 'application/json',
+            'host' => 'app.example.com',
+            'origin' => 'https://app.example.com',
+        ]));
+
+        self::assertSame(202, $response->status);
+        self::assertSame(['accepted' => 1, 'rejected' => 0, 'errors' => []], $response->body);
+        self::assertInstanceOf(BrowserRelayAcceptedBatch::class, $acceptedBatch);
+        self::assertSame('request_event', $acceptedBatch->events[0]['event_type']);
+        self::assertSame(503, $acceptedBatch->events[0]['payload']['response_status']);
+    }
+
     public function testRejectsRequestsFromNonMatchingOrigins(): void
     {
         $handler = new BrowserRelayHandler();

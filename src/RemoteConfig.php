@@ -51,9 +51,9 @@ final class RemoteConfig
         return new CapturePolicy(
             'balanced',
             'warning',
-            'all',
-            'local_only',
-            'standalone_when_activated',
+            'failures_only',
+            'exception_only',
+            'buffer_only',
         );
     }
 
@@ -61,8 +61,8 @@ final class RemoteConfig
     {
         return new CapturePolicy(
             'minimal',
-            'warning',
-            'off',
+            'error',
+            'failures_only',
             'local_only',
             'buffer_only',
         );

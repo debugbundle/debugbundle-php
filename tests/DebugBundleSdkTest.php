@@ -71,7 +71,7 @@ final class DebugBundleSdkTest extends TestCase
         DebugBundle::captureLog('facade log', 'error', ['request_id' => 'req_1']);
         DebugBundle::captureRequest(
             ['method' => 'GET', 'path' => '/facade', 'headers' => ['x-request-id' => 'req_1'], 'query' => []],
-            ['status_code' => 204, 'duration_ms' => 12]
+            ['status_code' => 503, 'duration_ms' => 12]
         );
         DebugBundle::probe('facade.probe', ['secret' => 'value']);
         DebugBundle::captureException(new \RuntimeException('facade exception'));

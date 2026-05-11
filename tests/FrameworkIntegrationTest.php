@@ -63,16 +63,16 @@ final class FrameworkIntegrationTest extends TestCase
         $clock->advance(0.045);
         $response = $middleware->handle($request, static function () use ($sdk): LaravelResponse {
             $sdk->captureLog('laravel warning', 'error');
-            return new LaravelResponse('ok', 201);
+            return new LaravelResponse('failed', 503);
         });
         $sdk->flush();
 
-        self::assertSame(201, $response->getStatusCode());
+        self::assertSame(503, $response->getStatusCode());
         self::assertSame(['log_event', 'request_event'], array_map(static fn (array $event): string => $event['event_type'], $transport->calls[0]['events']));
         self::assertSame('trace-laravel', $transport->calls[0]['events'][0]['correlation']['trace_id']);
         self::assertSame('req_1', $transport->calls[0]['events'][0]['correlation']['request_id']);
         self::assertSame('/orders', $transport->calls[0]['events'][1]['payload']['path']);
-        self::assertSame(201, $transport->calls[0]['events'][1]['payload']['response_status']);
+        self::assertSame(503, $transport->calls[0]['events'][1]['payload']['response_status']);
         self::assertSame('trace-laravel', $transport->calls[0]['events'][1]['correlation']['trace_id']);
         self::assertSame('req_1', $transport->calls[0]['events'][1]['correlation']['request_id']);
     }
@@ -140,7 +140,7 @@ final class FrameworkIntegrationTest extends TestCase
         $subscriber->onKernelRequest(new RequestEvent($kernel, $request, HttpKernelInterface::MAIN_REQUEST));
         $sdk->captureLog('symfony warning', 'error');
         $clock->advance(0.02);
-        $subscriber->onKernelResponse(new ResponseEvent($kernel, $request, HttpKernelInterface::MAIN_REQUEST, new SymfonyResponse('ok', 202)));
+        $subscriber->onKernelResponse(new ResponseEvent($kernel, $request, HttpKernelInterface::MAIN_REQUEST, new SymfonyResponse('failed', 503)));
 
         $failingRequest = SymfonyRequest::create('/inventory/boom', 'GET', [], [], [], [
             'HTTP_X_CORRELATION_ID' => 'corr-symfony',
@@ -406,13 +406,13 @@ final class FrameworkIntegrationTest extends TestCase
         $mainRequest = SymfonyRequest::create('/fallback', 'GET');
         $mainRequest->attributes->set('_debugbundle_started_at', 'not-a-number');
         $clock->advance(0.01);
-        $subscriber->onKernelResponse(new ResponseEvent($kernel, $mainRequest, HttpKernelInterface::MAIN_REQUEST, new SymfonyResponse('ok', 204)));
+        $subscriber->onKernelResponse(new ResponseEvent($kernel, $mainRequest, HttpKernelInterface::MAIN_REQUEST, new SymfonyResponse('failed', 503)));
         $sdk->flush();
 
         self::assertCount(1, $transport->calls);
         self::assertSame('request_event', $transport->calls[0]['events'][0]['event_type']);
         self::assertSame('/fallback', $transport->calls[0]['events'][0]['payload']['path']);
-        self::assertSame(204, $transport->calls[0]['events'][0]['payload']['response_status']);
+        self::assertSame(503, $transport->calls[0]['events'][0]['payload']['response_status']);
     }
 
     public function testLaravelMiddlewareActivatesTriggerTokenFromQueryForSingleRequestOnly(): void

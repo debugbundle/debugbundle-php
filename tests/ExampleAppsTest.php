@@ -61,7 +61,7 @@ final class ExampleAppsTest extends TestCase
         $exceptionResponse = $app->handle(LaravelRequest::create('/exception', 'GET'));
         $app->reset();
 
-        self::assertSame(202, $logResponse->getStatusCode());
+        self::assertSame(503, $logResponse->getStatusCode());
         self::assertSame(500, $exceptionResponse->getStatusCode());
 
         $requests = $this->readCapturedRequests();

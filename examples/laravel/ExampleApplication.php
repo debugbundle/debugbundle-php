@@ -71,7 +71,7 @@ final class ExampleApplication
 
         return new Response(
             json_encode(['ok' => true, 'logged' => true], JSON_THROW_ON_ERROR),
-            202,
+            503,
             ['Content-Type' => 'application/json']
         );
     }

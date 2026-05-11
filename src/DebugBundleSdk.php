@@ -754,9 +754,14 @@ final class DebugBundleSdk
     /** @param array<string, mixed>|null $response */
     private function shouldCaptureRequestEvent(?array $response): bool
     {
+        $statusCode = isset($response['status_code']) && is_numeric($response['status_code']) ? (int) $response['status_code'] : null;
+        if ($statusCode !== null && $statusCode >= 500) {
+            return true;
+        }
+
         return match ($this->capturePolicy->captureRequestEvents) {
             'off' => false,
-            'failures_only', 'filtered' => isset($response['status_code']) && is_numeric($response['status_code']) && (int) $response['status_code'] >= 500,
+            'failures_only', 'filtered' => false,
             default => true,
         };
     }

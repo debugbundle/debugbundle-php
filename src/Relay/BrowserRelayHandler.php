@@ -15,6 +15,7 @@ final class BrowserRelayHandler
         'frontend_exception',
         'error_suppressed',
         'frontend_breadcrumb',
+        'request_event',
         'probe_event',
     ];
 

@@ -97,8 +97,8 @@ final class RemoteConfigTest extends TestCase
                     'capture_policy' => [
                         'preset' => 'balanced',
                         'capture_logs' => 'warning',
-                        'capture_request_events' => 'all',
-                        'capture_breadcrumbs' => 'local_only',
+                        'capture_request_events' => 'failures_only',
+                        'capture_breadcrumbs' => 'exception_only',
                         'capture_probe_events' => 'standalone_when_activated',
                     ],
                 ],
@@ -160,14 +160,17 @@ final class RemoteConfigTest extends TestCase
             'probesPollInterval' => 25000,
         ]);
 
-        $sdk->captureMessage('warning still allowed', 'warning');
+        $sdk->captureMessage('warning blocked', 'warning');
+        $sdk->captureMessage('error still allowed', 'error');
         $sdk->captureMessage('info blocked', 'info');
         $sdk->captureRequest(['method' => 'GET', 'path' => '/ok', 'headers' => []], ['status_code' => 200]);
+        $sdk->captureRequest(['method' => 'GET', 'path' => '/boom', 'headers' => []], ['status_code' => 503]);
         $sdk->flush();
 
         self::assertCount(1, $transport->calls);
-        self::assertSame(['log_event'], array_map(static fn (array $event): string => $event['event_type'], $transport->calls[0]['events']));
-        self::assertSame('warning still allowed', $transport->calls[0]['events'][0]['payload']['message']);
+        self::assertSame(['log_event', 'request_event'], array_map(static fn (array $event): string => $event['event_type'], $transport->calls[0]['events']));
+        self::assertSame('error still allowed', $transport->calls[0]['events'][0]['payload']['message']);
+        self::assertSame(503, $transport->calls[0]['events'][1]['payload']['response_status']);
     }
 
     public function testCapturePolicyFiltersLogsAndRequestEventsFromRemoteConfig(): void
