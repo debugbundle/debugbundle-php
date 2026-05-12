@@ -45,6 +45,7 @@ final class DebugBundleSdk
     private bool $exceptionsHooked = false;
     private bool $shutdownHooked = false;
     private bool $probesEnabled = true;
+    private int $processStartedAtNs;
 
     /** @var \Closure(): float */
     private \Closure $timeProvider;
@@ -91,6 +92,7 @@ final class DebugBundleSdk
         $this->capturedExceptions = new \WeakMap();
         $this->redactFields = $this->buildRedactFields(null);
         $this->capturePolicy = RemoteConfig::balancedCapturePolicy();
+        $this->processStartedAtNs = hrtime(true);
     }
 
     /** @param array<string, mixed> $config */
@@ -551,7 +553,7 @@ final class DebugBundleSdk
             'handled' => $handled,
             'request' => $this->buildRequestPayload($redactedContext['request'] ?? null),
             'response' => $this->buildResponsePayload($redactedContext['response'] ?? null),
-            'runtime' => ['version' => PHP_VERSION],
+            'runtime' => $this->buildRuntimePayload(),
         ];
 
         if ($this->probeFlushOnError) {
@@ -641,6 +643,31 @@ final class DebugBundleSdk
 
         return [
             'status_code' => isset($response['status_code']) ? (int) $response['status_code'] : null,
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function buildRuntimePayload(): array
+    {
+        $pid = getmypid();
+        $cwd = getcwd();
+        $hostname = gethostname();
+
+        return [
+            'version' => PHP_VERSION,
+            'platform' => PHP_OS_FAMILY,
+            'arch' => php_uname('m') ?: null,
+            'pid' => is_int($pid) ? $pid : null,
+            'cwd' => is_string($cwd) ? $cwd : null,
+            'uptime_sec' => max(0.0, (hrtime(true) - $this->processStartedAtNs) / 1_000_000_000),
+            'hostname' => $hostname !== false ? $hostname : null,
+            'memory' => [
+                'rss' => null,
+                'heap_total' => memory_get_usage(true),
+                'heap_used' => memory_get_usage(false),
+                'external' => null,
+                'peak' => memory_get_peak_usage(true),
+            ],
         ];
     }
 

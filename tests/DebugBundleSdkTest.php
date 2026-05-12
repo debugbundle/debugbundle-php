@@ -305,7 +305,17 @@ final class DebugBundleSdkTest extends TestCase
         self::assertTrue($exceptionEvent['payload']['handled']);
         self::assertSame('/checkout', $exceptionEvent['payload']['request']['path']);
         self::assertSame(500, $exceptionEvent['payload']['response']['status_code']);
-        self::assertSame(['version' => PHP_VERSION], $exceptionEvent['payload']['runtime']);
+        $runtime = $exceptionEvent['payload']['runtime'];
+        self::assertSame(PHP_VERSION, $runtime['version']);
+        self::assertSame(PHP_OS_FAMILY, $runtime['platform']);
+        self::assertIsString($runtime['arch']);
+        self::assertIsInt($runtime['pid']);
+        self::assertIsString($runtime['cwd']);
+        self::assertIsFloat($runtime['uptime_sec']);
+        self::assertGreaterThanOrEqual(0.0, $runtime['uptime_sec']);
+        self::assertIsString($runtime['hostname']);
+        self::assertIsArray($runtime['memory']);
+        self::assertArrayNotHasKey('environment', $runtime);
     }
 
     public function testSuppressesDuplicateExceptionsAfterTheFirstThree(): void

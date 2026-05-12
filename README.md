@@ -2,7 +2,7 @@
 
 DebugBundle SDK for PHP.
 
-Current scaffold coverage includes the universal static SDK facade, vanilla PHP error/exception/shutdown hooks, request-scoped batching, redaction, duplicate suppression, always-on probe buffering, Monolog log capture, Laravel middleware plus service-provider scaffolding, Symfony subscriber plus bundle scaffolding, request-local browser/backend correlation propagation from incoming trace and request-id headers, the first remote-config / capture-policy control plane for paid-tier probe activation, request-scoped trigger-token probe activation from query/header inputs, vendored machine-readable schema validation for emitted event envelopes, a standalone GitHub Actions CI workflow that validates Composer metadata, PHPUnit, and PHPStan across the supported PHP runtime range, an enforced per-file coverage gate with focused facade, suppression, framework-adapter, and real HTTP transport coverage, runnable Laravel/Symfony example apps that emit incidents through the real SDK transport path, and a browser relay foundation with same-origin validation plus Laravel/Symfony relay adapters.
+Current scaffold coverage includes the universal static SDK facade, vanilla PHP error/exception/shutdown hooks, request-scoped batching, redaction, duplicate suppression, always-on probe buffering, Monolog log capture, Laravel middleware plus service-provider scaffolding, Symfony subscriber plus bundle scaffolding, request-local browser/backend correlation propagation from incoming trace and request-id headers, the first remote-config / capture-policy control plane for paid-tier probe activation, request-scoped trigger-token probe activation from query/header inputs, vendored machine-readable schema validation for emitted event envelopes, a standalone GitHub Actions CI workflow that validates Composer metadata, PHPUnit, and PHPStan across the supported PHP runtime range, an enforced per-file coverage gate with focused facade, suppression, framework-adapter, and real HTTP transport coverage, runnable Laravel/Symfony example apps that emit incidents through the real SDK transport path, a browser relay foundation with same-origin validation plus Laravel/Symfony relay adapters, and safe backend runtime process facts on exception payloads without reading environment variables.
 
 ## Installation
 
@@ -94,6 +94,21 @@ The Laravel middleware and Symfony subscriber bind request-local correlation met
 - `X-Correlation-Id` is used as the request-id fallback when `X-Request-Id` is absent
 
 When no incoming trace header is present, the SDK leaves the correlation fields unset and continues normally.
+
+## Runtime Context
+
+Backend exception events now include safe runtime process facts when the host exposes them, including:
+
+- PHP version
+- platform
+- architecture
+- pid
+- cwd
+- uptime
+- hostname
+- best-effort memory metadata
+
+The SDK does not read or emit environment variables in this runtime block.
 
 ## Trigger Tokens
 
