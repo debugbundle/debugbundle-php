@@ -24,6 +24,11 @@ final class DebugBundleSdk
         'error' => 40,
         'critical' => 50,
     ];
+    private const BALANCED_IMMEDIATE_REQUEST_STATUSES = [408, 423, 424, 425, 429];
+    private const INVESTIGATIVE_IMMEDIATE_REQUEST_STATUSES = [408, 423, 424, 425, 429, 409];
+    private const BALANCED_STANDARD_ANOMALY_STATUSES = [401, 403, 404, 409, 422];
+    private const BALANCED_HIGH_VOLUME_ANOMALY_STATUSES = [400, 410];
+    private const INVESTIGATIVE_ANOMALY_STATUSES = [401, 403, 404, 409, 422, 400, 410];
 
     private ?TransportInterface $transportOverride;
     private ?TransportInterface $transport = null;
@@ -782,14 +787,46 @@ final class DebugBundleSdk
     private function shouldCaptureRequestEvent(?array $response): bool
     {
         $statusCode = isset($response['status_code']) && is_numeric($response['status_code']) ? (int) $response['status_code'] : null;
-        if ($statusCode !== null && $statusCode >= 500) {
+        if ($this->isImmediateRequestIncidentStatus($statusCode)) {
             return true;
         }
 
         return match ($this->capturePolicy->captureRequestEvents) {
             'off' => false,
-            'failures_only', 'filtered' => false,
+            'failures_only' => $this->isRequestAnomalyCandidateStatus($statusCode),
+            'filtered' => false,
             default => true,
+        };
+    }
+
+    private function isImmediateRequestIncidentStatus(?int $statusCode): bool
+    {
+        if ($statusCode === null) {
+            return false;
+        }
+
+        if ($statusCode >= 500) {
+            return true;
+        }
+
+        return match ($this->capturePolicy->preset) {
+            'investigative' => in_array($statusCode, self::INVESTIGATIVE_IMMEDIATE_REQUEST_STATUSES, true),
+            'balanced' => in_array($statusCode, self::BALANCED_IMMEDIATE_REQUEST_STATUSES, true),
+            default => false,
+        };
+    }
+
+    private function isRequestAnomalyCandidateStatus(?int $statusCode): bool
+    {
+        if ($statusCode === null || $statusCode < 400 || $statusCode >= 500) {
+            return false;
+        }
+
+        return match ($this->capturePolicy->preset) {
+            'investigative' => in_array($statusCode, self::INVESTIGATIVE_ANOMALY_STATUSES, true),
+            'balanced' => in_array($statusCode, self::BALANCED_STANDARD_ANOMALY_STATUSES, true)
+                || in_array($statusCode, self::BALANCED_HIGH_VOLUME_ANOMALY_STATUSES, true),
+            default => false,
         };
     }
 
