@@ -808,6 +808,9 @@ final class DebugBundleSdk
         if ($statusCode >= 500) {
             return true;
         }
+        if (in_array($statusCode, $this->capturePolicy->immediateClientErrorStatuses, true)) {
+            return true;
+        }
 
         return match ($this->capturePolicy->preset) {
             'investigative' => in_array($statusCode, self::INVESTIGATIVE_IMMEDIATE_REQUEST_STATUSES, true),

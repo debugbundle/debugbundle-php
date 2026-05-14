@@ -6,12 +6,14 @@ namespace DebugBundle;
 
 final class CapturePolicy
 {
+    /** @param list<int> $immediateClientErrorStatuses */
     public function __construct(
         public readonly string $preset,
         public readonly string $captureLogs,
         public readonly string $captureRequestEvents,
         public readonly string $captureBreadcrumbs,
         public readonly string $captureProbeEvents,
+        public readonly array $immediateClientErrorStatuses,
     ) {
     }
 }
@@ -54,6 +56,7 @@ final class RemoteConfig
             'failures_only',
             'exception_only',
             'buffer_only',
+            [],
         );
     }
 
@@ -65,6 +68,7 @@ final class RemoteConfig
             'failures_only',
             'local_only',
             'buffer_only',
+            [],
         );
     }
 
@@ -163,6 +167,7 @@ final class RemoteConfig
         $captureRequestEvents = self::asNonEmptyString($payload['capture_request_events'] ?? null);
         $captureBreadcrumbs = self::asNonEmptyString($payload['capture_breadcrumbs'] ?? null);
         $captureProbeEvents = self::asNonEmptyString($payload['capture_probe_events'] ?? null);
+        $immediateClientErrorStatuses = self::parseImmediateClientErrorStatuses($payload['immediate_client_error_statuses'] ?? null);
 
         if (!in_array($captureLogs, ['off', 'error', 'warning', 'info'], true)) {
             return null;
@@ -176,6 +181,9 @@ final class RemoteConfig
         if (!in_array($captureProbeEvents, ['buffer_only', 'standalone_when_activated'], true)) {
             return null;
         }
+        if ($immediateClientErrorStatuses === null) {
+            return null;
+        }
 
         return new CapturePolicy(
             $preset,
@@ -183,7 +191,32 @@ final class RemoteConfig
             $captureRequestEvents,
             $captureBreadcrumbs,
             $captureProbeEvents,
+            $immediateClientErrorStatuses,
         );
+    }
+
+    /** @return list<int>|null */
+    private static function parseImmediateClientErrorStatuses(mixed $value): ?array
+    {
+        if ($value === null) {
+            return [];
+        }
+        if (!is_array($value) || count($value) > 12) {
+            return null;
+        }
+
+        $statuses = [];
+        foreach ($value as $item) {
+            if (!is_int($item) || $item < 400 || $item > 499) {
+                return null;
+            }
+            $statuses[] = $item;
+        }
+
+        $statuses = array_values(array_unique($statuses));
+        sort($statuses, SORT_NUMERIC);
+
+        return $statuses;
     }
 
     private static function parseDirective(mixed $payload): ?RemoteProbeDirective
