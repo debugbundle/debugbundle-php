@@ -650,6 +650,82 @@ final class FrameworkIntegrationTest extends TestCase
         self::assertCount(1, $accepted);
     }
 
+    public function testLaravelRelayMiddlewareWritesLocalOnlyRelayFiles(): void
+    {
+        $eventsDir = sys_get_temp_dir() . '/debugbundle-php-laravel-relay-' . bin2hex(random_bytes(4));
+        $middleware = new DebugBundleRelayMiddleware([
+            'projectMode' => 'local-only',
+            'localEventsDir' => $eventsDir,
+        ]);
+
+        $request = LaravelRequest::create(
+            '/debugbundle/browser',
+            'POST',
+            [],
+            [],
+            [],
+            [
+                'HTTP_ORIGIN' => 'https://app.example.com',
+                'HTTP_HOST' => 'app.example.com',
+                'CONTENT_TYPE' => 'application/json',
+            ],
+            json_encode([
+                'batch' => [[
+                    'schema_version' => '2026-03-01',
+                    'event_id' => '00000000-0000-4000-8000-000000000312',
+                    'event_type' => 'frontend_exception',
+                    'occurred_at' => '2026-03-31T10:00:00Z',
+                    'sdk_version' => '1.2.3',
+                    'service' => ['name' => 'checkout-web', 'environment' => 'production'],
+                    'payload' => ['name' => 'TypeError', 'message' => 'broken'],
+                ]],
+            ], JSON_THROW_ON_ERROR)
+        );
+
+        $response = $middleware->handle($request, static fn () => new LaravelResponse('next', 204));
+
+        self::assertSame(202, $response->getStatusCode());
+        self::assertCount(1, glob($eventsDir . '/*.events.json') ?: []);
+    }
+
+    public function testSymfonyRelayControllerWritesLocalOnlyRelayFiles(): void
+    {
+        $eventsDir = sys_get_temp_dir() . '/debugbundle-php-symfony-relay-' . bin2hex(random_bytes(4));
+        $controller = new DebugBundleRelayController([
+            'projectMode' => 'local-only',
+            'localEventsDir' => $eventsDir,
+        ]);
+
+        $request = SymfonyRequest::create(
+            '/debugbundle/browser',
+            'POST',
+            [],
+            [],
+            [],
+            [
+                'HTTP_ORIGIN' => 'https://app.example.com',
+                'HTTP_HOST' => 'app.example.com',
+                'CONTENT_TYPE' => 'application/json',
+            ],
+            json_encode([
+                'batch' => [[
+                    'schema_version' => '2026-03-01',
+                    'event_id' => '00000000-0000-4000-8000-000000000313',
+                    'event_type' => 'frontend_exception',
+                    'occurred_at' => '2026-03-31T10:00:00Z',
+                    'sdk_version' => '1.2.3',
+                    'service' => ['name' => 'checkout-web', 'environment' => 'production'],
+                    'payload' => ['name' => 'TypeError', 'message' => 'broken'],
+                ]],
+            ], JSON_THROW_ON_ERROR)
+        );
+
+        $response = $controller($request);
+
+        self::assertSame(202, $response->getStatusCode());
+        self::assertCount(1, glob($eventsDir . '/*.events.json') ?: []);
+    }
+
     private function captureLaravelProviderFactory(): \Closure
     {
         $factory = null;

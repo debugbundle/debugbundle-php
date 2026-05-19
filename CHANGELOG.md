@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-05-19
+
+### Added
+- Full browser relay delivery parity, including local-only event-file writes, connected durable spool writes, connected cloud forwarding with server-side project credentials, shared relay compliance fixtures, and an injectable `BrowserRelayRateLimitStore` for shared-nothing runtimes.
+
 ## [0.1.6] - 2026-05-19
 
 ### Added
@@ -39,5 +44,5 @@
 - Added a standalone GitHub Actions CI workflow for the PHP SDK that validates Composer package metadata and runs PHPUnit plus PHPStan on PHP 8.1, 8.2, and 8.3.
 - Added an enforced per-file coverage gate for `src/` with a checked-in Clover coverage checker, CI coverage job, real HTTP transport coverage, and focused tests for the static facade, suppression logic, and framework adapter edge paths.
 - Added runnable Laravel and Symfony example apps, including built-in-server entrypoints and integration tests that verify both examples emit request, log, and exception events through the real HTTP transport path.
-- Added the browser relay foundation for the PHP SDK, including a framework-agnostic relay handler, Laravel middleware and Symfony controller adapters, and contract coverage for origin validation, JSON-only relay requests, accepted browser event filtering, body limits, and per-IP rate limiting.
+- Added the initial browser relay handler for the PHP SDK, including a framework-agnostic relay handler, Laravel middleware and Symfony controller adapters, and contract coverage for origin validation, JSON-only relay requests, accepted browser event filtering, body limits, and per-IP rate limiting.
 - Added request-scoped trigger-token probe activation for the PHP SDK, including remote-config `trigger_token_key` parsing, HMAC-validated `_debug_probe` and `X-DebugBundle-Probe-Trigger` handling, and Laravel/Symfony coverage for header precedence, expiry rejection, and per-request reset.

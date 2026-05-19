@@ -13,7 +13,7 @@ final class DebugBundleRelayController
 {
     private BrowserRelayHandler $handler;
 
-    /** @param array{allowedOrigins?:list<string>,maxBodyBytes?:int,rateLimitPerMinute?:int,onAccept?:callable(\DebugBundle\Relay\BrowserRelayAcceptedBatch):void} $options */
+    /** @param array{allowedOrigins?:list<string>,maxBodyBytes?:int,rateLimitPerMinute?:int,onAccept?:callable(\DebugBundle\Relay\BrowserRelayAcceptedBatch):void,projectMode?:string,projectToken?:string,endpoint?:string,localEventsDir?:string,spoolDir?:string,durableWrite?:bool,service?:string,environment?:string,forwardTransport?:\DebugBundle\Transport\TransportInterface,rateLimitStore?:\DebugBundle\Relay\BrowserRelayRateLimitStore} $options */
     public function __construct(array $options = [])
     {
         $this->handler = new BrowserRelayHandler($options);

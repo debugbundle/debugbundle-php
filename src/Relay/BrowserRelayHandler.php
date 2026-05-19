@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace DebugBundle\Relay;
 
+use DebugBundle\Transport\TransportInterface;
+
 final class BrowserRelayHandler
 {
     private const DEFAULT_MAX_BODY_BYTES = 262144;
@@ -28,10 +30,24 @@ final class BrowserRelayHandler
     /** @var \Closure(BrowserRelayAcceptedBatch): void */
     private \Closure $onAccept;
 
-    /** @var array<string, list<int>> */
-    private array $rateLimitState = [];
+    private ?string $projectMode;
+    private string $projectToken;
+    private ?string $endpoint;
+    private ?string $localEventsDir;
+    private ?string $spoolDir;
+    private bool $durableWrite;
+    private ?string $serviceOverride;
+    private ?string $environmentOverride;
+    private ?RelayForwardTransport $forwardTransport;
+    private BrowserRelayRateLimitStore $rateLimitStore;
 
-    /** @param array{allowedOrigins?:list<string>,maxBodyBytes?:int,rateLimitPerMinute?:int,onAccept?:callable(BrowserRelayAcceptedBatch):void} $options */
+    /** @var array<string, RelayFileTransport> */
+    private array $localTransports = [];
+
+    /** @var array<string, RelayFileTransport> */
+    private array $spoolTransports = [];
+
+    /** @param array{allowedOrigins?:list<string>,maxBodyBytes?:int,rateLimitPerMinute?:int,onAccept?:callable(BrowserRelayAcceptedBatch):void,projectMode?:string,projectToken?:string,endpoint?:string,localEventsDir?:string,spoolDir?:string,durableWrite?:bool,service?:string,environment?:string,forwardTransport?:TransportInterface,rateLimitStore?:BrowserRelayRateLimitStore} $options */
     public function __construct(array $options = [])
     {
         $this->allowedOrigins = array_values(array_filter(
@@ -44,6 +60,24 @@ final class BrowserRelayHandler
             ? \Closure::fromCallable($options['onAccept'])
             : static function (): void {
             };
+        $normalizedProjectMode = strtolower(trim((string) ($options['projectMode'] ?? '')));
+        $this->projectMode = $normalizedProjectMode !== '' ? $normalizedProjectMode : null;
+        if (!in_array($this->projectMode, [null, 'connected', 'local-only'], true)) {
+            $this->projectMode = null;
+        }
+        $this->projectToken = trim((string) ($options['projectToken'] ?? ''));
+        $this->endpoint = isset($options['endpoint']) && $options['endpoint'] !== '' ? (string) $options['endpoint'] : null;
+        $this->localEventsDir = isset($options['localEventsDir']) && $options['localEventsDir'] !== '' ? (string) $options['localEventsDir'] : null;
+        $this->spoolDir = isset($options['spoolDir']) && $options['spoolDir'] !== '' ? (string) $options['spoolDir'] : null;
+        $this->durableWrite = ($options['durableWrite'] ?? true) !== false;
+        $this->serviceOverride = isset($options['service']) && $options['service'] !== '' ? (string) $options['service'] : null;
+        $this->environmentOverride = isset($options['environment']) && $options['environment'] !== '' ? (string) $options['environment'] : null;
+        $this->rateLimitStore = $options['rateLimitStore'] ?? new InMemoryBrowserRelayRateLimitStore();
+        $this->forwardTransport = $this->projectMode === 'connected'
+            ? (isset($options['forwardTransport'])
+                ? new RelayForwardTransport($options['forwardTransport'])
+                : ($this->endpoint !== null ? RelayForwardTransport::fromEndpoint($this->endpoint) : null))
+            : null;
     }
 
     /** @param array{method?:string,headers?:array<string,string>,body:string,ipAddress?:string|null} $request */
@@ -120,13 +154,21 @@ final class BrowserRelayHandler
         }
 
         if ($acceptedEvents !== []) {
-            $callback = $this->onAccept;
-            $callback(new BrowserRelayAcceptedBatch(
-                $acceptedEvents,
-                $this->stripSensitiveHeaders($headers),
-                $ipAddress,
-                gmdate('Y-m-d\\TH:i:s') . 'Z',
-            ));
+            try {
+                if (!$this->deliverEvents($acceptedEvents)) {
+                    return new BrowserRelayResponse(500);
+                }
+
+                $callback = $this->onAccept;
+                $callback(new BrowserRelayAcceptedBatch(
+                    $acceptedEvents,
+                    $this->stripSensitiveHeaders($headers),
+                    $ipAddress,
+                    gmdate('Y-m-d\\TH:i:s') . 'Z',
+                ));
+            } catch (\Throwable) {
+                return new BrowserRelayResponse(500);
+            }
         }
 
         if ($errors !== []) {
@@ -179,22 +221,7 @@ final class BrowserRelayHandler
 
     private function isRateLimited(?string $ipAddress): bool
     {
-        $key = $ipAddress ?? 'unknown';
-        $now = time();
-        $windowStart = $now - 60;
-        $timestamps = array_values(array_filter(
-            $this->rateLimitState[$key] ?? [],
-            static fn (int $timestamp): bool => $timestamp > $windowStart
-        ));
-
-        if (count($timestamps) >= $this->rateLimitPerMinute) {
-            $this->rateLimitState[$key] = $timestamps;
-            return true;
-        }
-
-        $timestamps[] = $now;
-        $this->rateLimitState[$key] = $timestamps;
-        return false;
+        return !$this->rateLimitStore->allow($ipAddress, $this->rateLimitPerMinute, 60, time());
     }
 
     /**
@@ -215,17 +242,19 @@ final class BrowserRelayHandler
             return null;
         }
 
-        $serviceName = $service['name'] ?? null;
-        $environment = $service['environment'] ?? null;
+        $serviceName = $this->serviceOverride ?? ($service['name'] ?? null);
+        $environment = $this->environmentOverride ?? ($service['environment'] ?? null);
         if (!is_string($serviceName) || $serviceName === '' || !is_string($environment) || $environment === '') {
             return null;
         }
 
         $correlation = [];
         if (isset($event['correlation']) && is_array($event['correlation'])) {
-            $traceId = $event['correlation']['trace_id'] ?? null;
-            if (is_string($traceId) || $traceId === null) {
-                $correlation['trace_id'] = $traceId;
+            foreach (['request_id', 'trace_id', 'session_id', 'user_id_hash'] as $key) {
+                $value = $event['correlation'][$key] ?? null;
+                if (is_string($value) || $value === null) {
+                    $correlation[$key] = $value;
+                }
             }
         }
 
@@ -242,6 +271,16 @@ final class BrowserRelayHandler
             ],
             'payload' => $payload,
         ];
+
+        $runtime = $service['runtime'] ?? null;
+        if (is_string($runtime) || $runtime === null) {
+            $sanitized['service']['runtime'] = $runtime;
+        }
+
+        $framework = $service['framework'] ?? null;
+        if (is_string($framework) || $framework === null) {
+            $sanitized['service']['framework'] = $framework;
+        }
 
         if ($correlation !== []) {
             $sanitized['correlation'] = $correlation;
@@ -300,5 +339,63 @@ final class BrowserRelayHandler
         }
 
         return $normalized;
+    }
+
+    /** @param list<array<string, mixed>> $acceptedEvents */
+    private function deliverEvents(array $acceptedEvents): bool
+    {
+        if ($this->projectMode === null) {
+            return true;
+        }
+
+        $serviceName = $this->serviceOverride ?? (string) ($acceptedEvents[0]['service']['name'] ?? 'service');
+
+        if ($this->projectMode === 'local-only') {
+            $transport = $this->localTransports[$serviceName] ??= new RelayFileTransport(
+                $this->localEventsDir ?? RelayFileTransport::resolveDefaultLocalEventsDir(),
+                $serviceName,
+            );
+
+            return $transport->write($acceptedEvents)->statusCode === 202;
+        }
+
+        if ($this->projectMode !== 'connected') {
+            return true;
+        }
+
+        if ($this->durableWrite) {
+            $transport = $this->spoolTransports[$serviceName] ??= new RelayFileTransport(
+                $this->spoolDir ?? RelayFileTransport::resolveDefaultRelaySpoolDir(),
+                $serviceName,
+            );
+
+            $spoolWriteResult = $transport->write($acceptedEvents);
+            if ($spoolWriteResult->statusCode !== 202) {
+                return false;
+            }
+
+            [$configured, $succeeded] = $this->forwardConnectedEvents($acceptedEvents);
+            if ($succeeded && $spoolWriteResult->writtenFilePath !== null) {
+                RelayFileTransport::markDelivered($spoolWriteResult->writtenFilePath);
+            }
+
+            return $configured || $spoolWriteResult->writtenFilePath !== null;
+        }
+
+        [$configured, $succeeded] = $this->forwardConnectedEvents($acceptedEvents);
+        return $configured && $succeeded;
+    }
+
+    /**
+     * @param list<array<string, mixed>> $acceptedEvents
+     * @return array{bool, bool}
+     */
+    private function forwardConnectedEvents(array $acceptedEvents): array
+    {
+        if ($this->forwardTransport === null || $this->projectToken === '') {
+            return [false, false];
+        }
+
+        return $this->forwardTransport->send($this->projectToken, $acceptedEvents);
     }
 }

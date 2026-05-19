@@ -2,7 +2,7 @@
 
 DebugBundle SDK for PHP.
 
-Current scaffold coverage includes the universal static SDK facade, vanilla PHP error/exception/shutdown hooks, request-scoped batching, redaction, duplicate suppression, always-on probe buffering, Monolog log capture, Laravel middleware plus service-provider scaffolding, Symfony subscriber plus bundle scaffolding, request-local browser/backend correlation propagation from incoming trace and request-id headers, the first remote-config / capture-policy control plane for paid-tier probe activation, request-scoped trigger-token probe activation from query/header inputs, vendored machine-readable schema validation for emitted event envelopes, a standalone GitHub Actions CI workflow that validates Composer metadata, PHPUnit, and PHPStan across the supported PHP runtime range, an enforced per-file coverage gate with focused facade, suppression, framework-adapter, and real HTTP transport coverage, runnable Laravel/Symfony example apps that emit incidents through the real SDK transport path, a browser relay foundation with same-origin validation plus Laravel/Symfony relay adapters, and safe backend runtime process facts on exception payloads without reading environment variables.
+Current scaffold coverage includes the universal static SDK facade, vanilla PHP error/exception/shutdown hooks, request-scoped batching, redaction, duplicate suppression, always-on probe buffering, Monolog log capture, Laravel middleware plus service-provider scaffolding, Symfony subscriber plus bundle scaffolding, request-local browser/backend correlation propagation from incoming trace and request-id headers, the first remote-config / capture-policy control plane for paid-tier probe activation, request-scoped trigger-token probe activation from query/header inputs, vendored machine-readable schema validation for emitted event envelopes, a standalone GitHub Actions CI workflow that validates Composer metadata, PHPUnit, and PHPStan across the supported PHP runtime range, an enforced per-file coverage gate with focused facade, suppression, framework-adapter, and real HTTP transport coverage, runnable Laravel/Symfony example apps that emit incidents through the real SDK transport path, a full browser relay handler with Laravel/Symfony adapters plus local-only and connected delivery modes, and safe backend runtime process facts on exception payloads without reading environment variables.
 
 ## Installation
 
@@ -126,7 +126,15 @@ The SDK now includes a framework-agnostic `DebugBundle\Relay\BrowserRelayHandler
 - `DebugBundle\Framework\Laravel\DebugBundleRelayMiddleware` handles the relay route in Laravel-style middleware stacks.
 - `DebugBundle\Framework\Symfony\DebugBundleRelayController` handles the relay route in Symfony applications.
 
-The relay foundation enforces `application/json`, rejects oversized bodies, applies per-IP rate limiting, validates same-origin or configured allowed origins, accepts only supported browser event types, strips trust-sensitive request headers, removes client-supplied trust fields, forces `sdk_name` to `@debugbundle/sdk-browser`, and preserves `correlation.trace_id` when present.
+The relay handler enforces `application/json`, accepts the canonical `batch` body shape only, rejects oversized bodies, applies per-IP rate limiting, validates same-origin or configured allowed origins, accepts only supported browser event types, strips trust-sensitive request headers, removes client-supplied trust fields, forces `sdk_name` to `@debugbundle/sdk-browser`, and preserves browser correlation fields (`request_id`, `trace_id`, `session_id`, and `user_id_hash`) when they are strings or `null`.
+
+Delivery behavior matches the shared relay contract across the shipped server SDKs:
+
+- `projectMode: 'local-only'` writes accepted browser events to local event files for CLI processing.
+- `projectMode: 'connected'` with the default `durableWrite: true` writes a durable relay spool record and then forwards to the ingestion API with the server-side project token.
+- `projectMode: 'connected'` with `durableWrite: false` uses the lower-latency forward-only path.
+
+Shared-nothing runtimes can replace the default in-memory limiter by passing a custom `rateLimitStore` that implements `DebugBundle\Relay\BrowserRelayRateLimitStore`.
 
 ## Docs
 
