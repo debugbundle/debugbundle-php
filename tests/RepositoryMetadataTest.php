@@ -27,7 +27,7 @@ final class RepositoryMetadataTest extends TestCase
         }
     }
 
-    public function testComposerMetadataAndCiWorkflowAgreeOnPhp84SupportFloor(): void
+    public function testComposerMetadataAndCiWorkflowAgreeOnPhp82SupportFloor(): void
     {
         $composerPath = dirname(__DIR__) . '/composer.json';
         $workflowPath = dirname(__DIR__) . '/.github/workflows/ci.yml';
@@ -38,12 +38,12 @@ final class RepositoryMetadataTest extends TestCase
         $composer = (string) file_get_contents($composerPath);
         $workflow = (string) file_get_contents($workflowPath);
 
-        self::assertStringContainsString('"php": ">=8.4"', $composer);
+        self::assertStringContainsString('"php": ">=8.2"', $composer);
+        self::assertStringContainsString("- '8.2'", $workflow);
+        self::assertStringContainsString("- '8.3'", $workflow);
         self::assertStringContainsString("- '8.4'", $workflow);
         self::assertStringNotContainsString("- '8.1'", $workflow);
-        self::assertStringNotContainsString("- '8.2'", $workflow);
-        self::assertStringNotContainsString("- '8.3'", $workflow);
-        self::assertStringContainsString("php-version: '8.4'", $workflow);
+        self::assertStringContainsString("php-version: '8.2'", $workflow);
     }
 
     public function testStandaloneCiWorkflowExistsWithExpectedPhpSdkValidationSteps(): void

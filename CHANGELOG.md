@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-05-19
+
 ### Added
 - Remote capture-policy parsing now honors `immediate_client_error_statuses` so configured `4xx` responses are emitted as immediate `request_event` incident signals even when generic request capture is disabled.
+
+### Changed
+- Lowered the declared PHP support floor for the SDK package, documentation, and GitHub Actions validation to PHP 8.2 while keeping the published dependency graph aligned with the supported runtime range.
 
 ## [0.1.3] - 2026-05-12
 

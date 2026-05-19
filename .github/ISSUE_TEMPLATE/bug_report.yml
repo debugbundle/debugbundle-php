@@ -41,7 +41,7 @@ body:
     attributes:
       label: Environment
       description: OS, PHP version, framework version, package version, and any other useful context.
-      placeholder: macOS 15, PHP 8.4, Laravel 11, debugbundle/sdk-php 0.1.0
+      placeholder: macOS 15, PHP 8.2, Laravel 11, debugbundle/sdk-php 0.1.0
     validations:
       required: true
   - type: textarea

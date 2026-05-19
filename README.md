@@ -6,7 +6,7 @@ Current scaffold coverage includes the universal static SDK facade, vanilla PHP 
 
 ## Installation
 
-Requires PHP 8.4 or newer.
+Requires PHP 8.2 or newer.
 
 ```bash
 composer require debugbundle/sdk-php
