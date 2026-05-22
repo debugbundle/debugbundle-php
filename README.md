@@ -1,12 +1,16 @@
 # DebugBundle PHP SDK
 
-DebugBundle SDK for PHP.
+PHP SDK for DebugBundle.
 
-Current scaffold coverage includes the universal static SDK facade, vanilla PHP error/exception/shutdown hooks, request-scoped batching, redaction, duplicate suppression, always-on probe buffering, Monolog log capture, Laravel middleware plus service-provider scaffolding, Symfony subscriber plus bundle scaffolding, request-local browser/backend correlation propagation from incoming trace and request-id headers, the first remote-config / capture-policy control plane for paid-tier probe activation, request-scoped trigger-token probe activation from query/header inputs, vendored machine-readable schema validation for emitted event envelopes, a standalone GitHub Actions CI workflow that validates Composer metadata, PHPUnit, and PHPStan across the supported PHP runtime range, an enforced per-file coverage gate with focused facade, suppression, framework-adapter, and real HTTP transport coverage, runnable Laravel/Symfony example apps that emit incidents through the real SDK transport path, a full browser relay handler with Laravel/Symfony adapters plus local-only and connected delivery modes, and safe backend runtime process facts on exception payloads without reading environment variables.
+![Packagist](https://img.shields.io/packagist/v/debugbundle/sdk-php?label=packagist)
+![CI](https://img.shields.io/github/actions/workflow/status/debugbundle/debugbundle-php/ci.yml?branch=main&label=ci)
+![License](https://img.shields.io/badge/license-AGPL--3.0--only-blue)
 
-## Installation
+Use this package to capture PHP backend exceptions, request metadata, Monolog records, runtime context, and probe data. It supports vanilla PHP plus Laravel, Symfony, Monolog, and browser relay adapters.
 
 Requires PHP 8.2 or newer.
+
+## Installation
 
 ```bash
 composer require debugbundle/sdk-php
@@ -20,126 +24,129 @@ composer require debugbundle/sdk-php
 use DebugBundle\DebugBundle;
 
 DebugBundle::init([
-    'projectToken' => $_ENV['DEBUGBUNDLE_TOKEN'],
+    'projectToken' => getenv('DEBUGBUNDLE_PROJECT_TOKEN'),
     'service' => 'checkout-api',
     'environment' => 'production',
-    'logger' => $logger,
 ]);
+
+DebugBundle::captureErrors();
+DebugBundle::captureExceptions();
+DebugBundle::captureShutdown();
 ```
 
-## Examples
-
-- `examples/laravel` demonstrates the Laravel-oriented service-provider and middleware path.
-- `examples/symfony` demonstrates the Symfony event-subscriber path.
-
-Each example exposes `/`, `/log`, and `/exception` routes and can be run with PHP's built-in server while pointing `DEBUGBUNDLE_ENDPOINT` at a local ingest stub or the DebugBundle API.
-
-## Laravel Exception Handler
-
-The SDK now includes `DebugBundle\Framework\Laravel\DebugBundleExceptionHandler`, a thin decorator for Laravel's existing exception handler binding.
+Capture handled errors, logs, messages, and probes explicitly:
 
 ```php
-use DebugBundle\Framework\Laravel\DebugBundleExceptionHandler;
-use Illuminate\Contracts\Debug\ExceptionHandler;
+DebugBundle::captureException($throwable);
+DebugBundle::captureLog('payment retry failed', 'warning', ['order_id' => $orderId]);
+DebugBundle::captureMessage('worker started');
+DebugBundle::probe('checkout.cart', ['item_count' => count($cart->items)]);
 
-$app->extend(ExceptionHandler::class, function (ExceptionHandler $handler) use ($sdk) {
-    return new DebugBundleExceptionHandler($sdk, $handler);
-});
+DebugBundle::flush();
 ```
 
-When the service provider runs in an application that already binds Laravel's exception handler contract, it decorates that binding automatically. This captures reportable exceptions outside the middleware path while skipping repeat capture of the same throwable.
+## Framework Integrations
 
-## Framework Logging
+| Runtime | Integration |
+| --- | --- |
+| Laravel | Service provider, request middleware, exception handler decoration, and log tap |
+| Symfony | Bundle/subscriber integration and Monolog service handler |
+| Monolog | `DebugBundle\Logging\DebugBundleHandler` |
+| Vanilla PHP | `captureErrors()`, `captureExceptions()`, and `captureShutdown()` |
 
-### Laravel
+Example apps live in `examples/laravel` and `examples/symfony`.
 
-For Laravel's Monolog-backed logging stack, add the SDK tap class to the channel configuration in `config/logging.php`:
+## Browser Relay
+
+PHP backends can host the browser relay endpoint used by `@debugbundle/sdk-browser`.
+
+| Runtime | Integration |
+| --- | --- |
+| Laravel | `DebugBundle\Framework\Laravel\DebugBundleRelayMiddleware` |
+| Symfony | `DebugBundle\Framework\Symfony\DebugBundleRelayController` |
+| Generic PHP | `DebugBundle\Relay\BrowserRelayHandler` |
+
+The relay validates JSON batches, enforces same-origin or allowed origins, strips trust-sensitive browser fields, keeps the server-side project token private, and supports local-only file writes or durable connected forwarding.
+
+## Configuration
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `projectToken` | required | Write-only DebugBundle project token. |
+| `service` | `php-service` | Service name shown on incidents and bundles. |
+| `environment` | `development` | Runtime environment such as `production`, `staging`, or `development`. |
+| `endpoint` | `https://api.debugbundle.com/v1/events` | Ingestion endpoint for connected mode or self-hosting. |
+| `enabled` | `true` | Disable all capture without removing instrumentation. |
+| `logger` | none | Optional Monolog logger to attach. |
+| `logLevel` | `warning` | Minimum captured log severity. |
+| `sampleRate` | `1.0` | Fraction of events to keep before transport. |
+| `batchSize` | `25` | Events per batch before flushing. |
+| `redactFields` | common sensitive fields | Additional field names to redact. |
+| `maxProbeLabels` | `50` | Maximum distinct probe labels buffered in memory. |
+| `maxProbeEntriesPerLabel` | `10` | Maximum entries retained per probe label. |
+| `probeFlushOnError` | `true` | Attach buffered probe data to captured exceptions. |
+| `probesPollInterval` | `60000` | Remote probe config poll interval in milliseconds. |
+| `configFetcher` | none | Custom remote-config fetch callable for tests or advanced routing. |
+
+## Laravel Logging
+
+For Laravel's Monolog-backed stack, add the SDK tap class to a channel in `config/logging.php`:
 
 ```php
 use DebugBundle\Framework\Laravel\DebugBundleLogTap;
 
 'channels' => [
-        'stack' => [
-                'driver' => 'stack',
-                'channels' => ['single'],
-                'tap' => [DebugBundleLogTap::class],
-        ],
+    'stack' => [
+        'driver' => 'stack',
+        'channels' => ['single'],
+        'tap' => [DebugBundleLogTap::class],
+    ],
 ],
 ```
 
-### Symfony
+## Symfony Logging
 
-For Symfony applications using MonologBundle, register the existing SDK handler as a Monolog service in `monolog.yaml`:
+For Symfony applications using MonologBundle, register the SDK handler as a Monolog service:
 
 ```yaml
 services:
-    DebugBundle\Logging\DebugBundleHandler:
-        arguments:
-            $sdk: '@DebugBundle\DebugBundleSdk'
+  DebugBundle\Logging\DebugBundleHandler:
+    arguments:
+      $sdk: '@DebugBundle\DebugBundleSdk'
 
 monolog:
-    handlers:
-        debugbundle:
-            type: service
-            id: DebugBundle\Logging\DebugBundleHandler
-            level: warning
+  handlers:
+    debugbundle:
+      type: service
+      id: DebugBundle\Logging\DebugBundleHandler
+      level: warning
 ```
 
-## Framework Correlation
+## Safety Defaults
 
-The Laravel middleware and Symfony subscriber bind request-local correlation metadata from incoming headers and attach it automatically to request, log, and exception events emitted during that request.
+- SDK failures are caught internally and do not crash the host process.
+- Sensitive fields are redacted before transport.
+- Duplicate event storms are suppressed locally.
+- Runtime context excludes environment variables.
+- Browser relay requests cannot smuggle server-side credentials.
 
-- `X-DebugBundle-Trace-Id` populates `correlation.trace_id`
-- `X-Request-Id` populates `correlation.request_id`
-- `X-Correlation-Id` is used as the request-id fallback when `X-Request-Id` is absent
+## Development
 
-When no incoming trace header is present, the SDK leaves the correlation fields unset and continues normally.
+```bash
+composer install
+composer test
+composer typecheck
+```
 
-## Runtime Context
+CI validates Composer metadata, PHPUnit, PHPStan, event schema fixtures, real HTTP transport coverage, and coverage gates.
 
-Backend exception events now include safe runtime process facts when the host exposes them, including:
+## Documentation
 
-- PHP version
-- platform
-- architecture
-- pid
-- cwd
-- uptime
-- hostname
-- best-effort memory metadata
-
-The SDK does not read or emit environment variables in this runtime block.
-
-## Trigger Tokens
-
-When the config endpoint returns a `trigger_token_key`, the Laravel middleware and Symfony subscriber will validate one-request probe trigger tokens from either request surface:
-
-- query parameter `_debug_probe=dbundle_probe_...`
-- header `X-DebugBundle-Probe-Trigger: dbundle_probe_...`
-
-Header values take precedence when both are present. Invalid or expired tokens are ignored silently, and activated probes are cleared after the current request.
-
-## Browser Relay
-
-The SDK now includes a framework-agnostic `DebugBundle\Relay\BrowserRelayHandler` for implementing the contract-required `POST /debugbundle/browser` endpoint in PHP servers.
-
-- `DebugBundle\Framework\Laravel\DebugBundleRelayMiddleware` handles the relay route in Laravel-style middleware stacks.
-- `DebugBundle\Framework\Symfony\DebugBundleRelayController` handles the relay route in Symfony applications.
-
-The relay handler enforces `application/json`, accepts the canonical `batch` body shape only, rejects oversized bodies, applies per-IP rate limiting, validates same-origin or configured allowed origins, accepts only supported browser event types, strips trust-sensitive request headers, removes client-supplied trust fields, forces `sdk_name` to `@debugbundle/sdk-browser`, and preserves browser correlation fields (`request_id`, `trace_id`, `session_id`, and `user_id_hash`) when they are strings or `null`.
-
-Delivery behavior matches the shared relay contract across the shipped server SDKs:
-
-- `projectMode: 'local-only'` writes accepted browser events to local event files for CLI processing.
-- `projectMode: 'connected'` with the default `durableWrite: true` writes a durable relay spool record and then forwards to the ingestion API with the server-side project token.
-- `projectMode: 'connected'` with `durableWrite: false` uses the lower-latency forward-only path.
-
-Shared-nothing runtimes can replace the default in-memory limiter by passing a custom `rateLimitStore` that implements `DebugBundle\Relay\BrowserRelayRateLimitStore`.
-
-## Docs
-
-https://debugbundle.com/docs/sdks/php
+- PHP SDK docs: <https://debugbundle.com/docs/sdks/php>
+- SDK overview: <https://debugbundle.com/docs/sdks>
+- Browser relay: <https://debugbundle.com/docs/sdks/browser-relay>
+- Repository: <https://github.com/debugbundle/debugbundle-php>
 
 ## License
 
-AGPL-3.0-only
+AGPL-3.0-only. See `LICENSE`.
