@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- Added a repo-local `make smoke` app-driven release gate that builds a Composer archive, installs the package into a fresh consumer fixture, drives server capture plus Symfony relay forwarding against a mock ingestion endpoint, and is now reused by CI and the published-package release smoke.
+
+### Changed
+- Expanded the README to cover the shared SDK release documentation gates: configuration precedence, mode-specific install examples, support labels, dependency alignment, relay behavior, service naming, safe startup/status semantics, and first-event verification.
+- Aligned emitted PHP SDK event metadata to the current package release so `sdk_version` now reports `0.1.8`.
+
 ## [0.1.7] - 2026-05-19
 
 ### Added

@@ -40,6 +40,9 @@ jobs:
       - name: PHPStan
         run: composer typecheck
 
+      - name: App-driven smoke
+        run: make smoke
+
   coverage:
     runs-on: ubuntu-latest
 

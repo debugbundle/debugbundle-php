@@ -64,6 +64,9 @@ jobs:
       - name: PHPStan
         run: composer typecheck
 
+      - name: App-driven smoke test built artifact
+        run: make smoke
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -132,19 +135,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          tmpdir="$(mktemp -d)"
-          cd "$tmpdir"
-
-          composer init --name debugbundle/release-smoke --no-interaction >/dev/null
-
           for attempt in $(seq 1 30); do
-            if composer require debugbundle/sdk-php:${RELEASE_VERSION} --no-interaction --prefer-dist >/dev/null 2>&1; then
-              php -r 'require "vendor/autoload.php"; if (!class_exists("DebugBundle\\DebugBundle")) { fwrite(STDERR, "missing DebugBundle class\n"); exit(1); }'
+            if php smoke/run_app_driven_smoke.php --package debugbundle/sdk-php:${RELEASE_VERSION} >/dev/null 2>&1; then
+              php smoke/run_app_driven_smoke.php --package debugbundle/sdk-php:${RELEASE_VERSION}
               exit 0
             fi
 
             if [[ "$attempt" == "30" ]]; then
-              composer require debugbundle/sdk-php:${RELEASE_VERSION} --no-interaction --prefer-dist
+              php smoke/run_app_driven_smoke.php --package debugbundle/sdk-php:${RELEASE_VERSION}
               exit 1
             fi
 

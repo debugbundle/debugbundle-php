@@ -105,7 +105,58 @@ final class RepositoryMetadataTest extends TestCase
         self::assertStringContainsString('composer install --no-interaction --prefer-dist', $workflow);
         self::assertStringContainsString('composer test', $workflow);
         self::assertStringContainsString('composer typecheck', $workflow);
+        self::assertStringContainsString('make smoke', $workflow);
         self::assertStringContainsString('https://packagist.org/api/update-package', $workflow);
-        self::assertStringContainsString('composer require debugbundle/sdk-php:${RELEASE_VERSION}', $workflow);
+        self::assertStringContainsString('php smoke/run_app_driven_smoke.php --package debugbundle/sdk-php:${RELEASE_VERSION}', $workflow);
+    }
+
+    public function testStandaloneSmokeHarnessExistsAndIsWiredIntoWorkflows(): void
+    {
+        $repoRoot = dirname(__DIR__);
+        $makefilePath = $repoRoot . '/Makefile';
+        $smokeRunnerPath = $repoRoot . '/smoke/run_app_driven_smoke.php';
+        $ciWorkflowPath = $repoRoot . '/.github/workflows/ci.yml';
+        $releaseWorkflowPath = $repoRoot . '/.github/workflows/release.yml';
+
+        self::assertFileExists($makefilePath);
+        self::assertFileExists($smokeRunnerPath);
+        self::assertFileExists($ciWorkflowPath);
+        self::assertFileExists($releaseWorkflowPath);
+
+        $makefile = (string) file_get_contents($makefilePath);
+        $ciWorkflow = (string) file_get_contents($ciWorkflowPath);
+        $releaseWorkflow = (string) file_get_contents($releaseWorkflowPath);
+
+        self::assertStringContainsString('.PHONY: smoke', $makefile);
+        self::assertStringContainsString('archive --format=zip', $makefile);
+        self::assertStringContainsString('smoke/run_app_driven_smoke.php --artifact', $makefile);
+
+        self::assertStringContainsString('make smoke', $ciWorkflow);
+        self::assertStringContainsString('make smoke', $releaseWorkflow);
+        self::assertStringContainsString('php smoke/run_app_driven_smoke.php --package debugbundle/sdk-php:${RELEASE_VERSION}', $releaseWorkflow);
+    }
+
+    public function testReadmeCoversPhpReleaseDocumentationGates(): void
+    {
+        $readmePath = dirname(__DIR__) . '/README.md';
+        self::assertFileExists($readmePath);
+
+        $readme = (string) file_get_contents($readmePath);
+
+        self::assertStringContainsString('## Configuration Reference', $readme);
+        self::assertStringContainsString('Configuration sources and precedence:', $readme);
+        self::assertStringContainsString('Capture-policy fields are server-owned', $readme);
+        self::assertStringContainsString('## Install Examples by Mode', $readme);
+        self::assertStringContainsString('## Runtime and Framework Support', $readme);
+        self::assertStringContainsString('## Dependency Alignment', $readme);
+        self::assertStringContainsString('## Service Naming', $readme);
+        self::assertStringContainsString('## Safe Startup and Status', $readme);
+        self::assertStringContainsString('## First-Event Verification', $readme);
+        self::assertStringContainsString('make smoke', $readme);
+        self::assertStringContainsString('same-origin', $readme);
+        self::assertStringContainsString('allowed origins', $readme);
+        self::assertStringContainsString('rate limiting', $readme);
+        self::assertStringContainsString('credential isolation', $readme);
+        self::assertStringContainsString('missing token', $readme);
     }
 }
