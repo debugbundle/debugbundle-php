@@ -7,7 +7,7 @@
 
 ### Changed
 - Expanded the README to cover the shared SDK release documentation gates: configuration precedence, mode-specific install examples, support labels, dependency alignment, relay behavior, service naming, safe startup/status semantics, and first-event verification.
-- Aligned emitted PHP SDK event metadata to the current package release so `sdk_version` now reports `0.1.8`.
+- Aligned emitted PHP SDK event metadata to the current package release so `sdk_version` now reports `0.1.9`.
 
 ## [0.1.7] - 2026-05-19
 

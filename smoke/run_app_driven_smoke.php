@@ -523,6 +523,14 @@ function findEventByType(array $events, string $eventType): array
 /** @param list<string> $command */
 function runCommand(array $command, ?string $cwd = null): void
 {
+    $environment = $_ENV;
+    if (!isset($environment['HOME']) || $environment['HOME'] === '') {
+        $environment['HOME'] = sys_get_temp_dir();
+    }
+    if (!isset($environment['COMPOSER_HOME']) || $environment['COMPOSER_HOME'] === '') {
+        $environment['COMPOSER_HOME'] = $environment['HOME'] . '/.composer';
+    }
+
     $process = proc_open(
         $command,
         [
@@ -532,7 +540,7 @@ function runCommand(array $command, ?string $cwd = null): void
         ],
         $pipes,
         $cwd,
-        $_ENV,
+        $environment,
     );
 
     if (!is_resource($process)) {

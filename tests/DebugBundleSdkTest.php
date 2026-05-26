@@ -266,7 +266,7 @@ final class DebugBundleSdkTest extends TestCase
             self::assertSame('2026-03-01', $event['schema_version']);
             self::assertMatchesRegularExpression('/^[0-9a-f-]{36}$/', $event['event_id']);
             self::assertSame('debugbundle/sdk-php', $event['sdk_name']);
-            self::assertSame('0.1.8', $event['sdk_version']);
+            self::assertSame('0.1.9', $event['sdk_version']);
             self::assertStringEndsWith('Z', $event['occurred_at']);
             self::assertSame([
                 'name' => 'checkout-api',
