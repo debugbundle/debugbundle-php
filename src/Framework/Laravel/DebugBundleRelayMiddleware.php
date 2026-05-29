@@ -31,7 +31,7 @@ final class DebugBundleRelayMiddleware
             'ipAddress' => $request->ip(),
         ]);
 
-        return new JsonResponse($response->body, $response->status);
+        return new JsonResponse($response->body, $response->status, $response->headers);
     }
 
     /**

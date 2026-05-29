@@ -84,49 +84,61 @@ final class BrowserRelayHandler
     public function handle(array $request): BrowserRelayResponse
     {
         $method = strtoupper((string) ($request['method'] ?? 'POST'));
-        if ($method !== 'POST') {
-            return new BrowserRelayResponse(405);
-        }
-
         $headers = $this->normalizeHeaders($request['headers'] ?? []);
+        $sourceOrigin = $this->sourceOrigin($headers);
         if (!$this->isOriginAllowed($headers)) {
             return new BrowserRelayResponse(403);
         }
 
+        $responseHeaders = is_string($sourceOrigin) ? $this->corsHeaders($sourceOrigin) : [];
+        $withHeaders = static fn (BrowserRelayResponse $response): BrowserRelayResponse => new BrowserRelayResponse(
+            $response->status,
+            $response->body,
+            array_merge($responseHeaders, $response->headers),
+        );
+
+        if ($method === 'OPTIONS') {
+            return $withHeaders(new BrowserRelayResponse(204));
+        }
+
+        if ($method !== 'POST') {
+            return $withHeaders(new BrowserRelayResponse(405));
+        }
+
         if (!$this->isSupportedContentType($headers['content-type'] ?? null)) {
-            return new BrowserRelayResponse(400, [
+            return $withHeaders(new BrowserRelayResponse(400, [
                 'accepted' => 0,
                 'rejected' => 0,
                 'errors' => ['Relay requests must use Content-Type: application/json.'],
-            ]);
+            ]));
         }
 
         $body = $request['body'];
         if (strlen($body) > $this->maxBodyBytes) {
-            return new BrowserRelayResponse(413);
+            return $withHeaders(new BrowserRelayResponse(413));
         }
 
         $ipAddress = $request['ipAddress'] ?? null;
         if ($this->isRateLimited($ipAddress)) {
-            return new BrowserRelayResponse(429);
+            return $withHeaders(new BrowserRelayResponse(429));
         }
 
         $decoded = json_decode($body, true);
         if (!is_array($decoded)) {
-            return new BrowserRelayResponse(400, [
+            return $withHeaders(new BrowserRelayResponse(400, [
                 'accepted' => 0,
                 'rejected' => 0,
                 'errors' => ['Relay request body must be valid JSON.'],
-            ]);
+            ]));
         }
 
         $batch = $decoded['batch'] ?? null;
         if (!is_array($batch)) {
-            return new BrowserRelayResponse(400, [
+            return $withHeaders(new BrowserRelayResponse(400, [
                 'accepted' => 0,
                 'rejected' => 0,
                 'errors' => ['Relay request body must include a batch array.'],
-            ]);
+            ]));
         }
 
         $acceptedEvents = [];
@@ -156,7 +168,7 @@ final class BrowserRelayHandler
         if ($acceptedEvents !== []) {
             try {
                 if (!$this->deliverEvents($acceptedEvents)) {
-                    return new BrowserRelayResponse(500);
+                    return $withHeaders(new BrowserRelayResponse(500));
                 }
 
                 $callback = $this->onAccept;
@@ -167,23 +179,23 @@ final class BrowserRelayHandler
                     gmdate('Y-m-d\\TH:i:s') . 'Z',
                 ));
             } catch (\Throwable) {
-                return new BrowserRelayResponse(500);
+                return $withHeaders(new BrowserRelayResponse(500));
             }
         }
 
         if ($errors !== []) {
-            return new BrowserRelayResponse(400, [
+            return $withHeaders(new BrowserRelayResponse(400, [
                 'accepted' => count($acceptedEvents),
                 'rejected' => count($errors),
                 'errors' => $errors,
-            ]);
+            ]));
         }
 
-        return new BrowserRelayResponse(202, [
+        return $withHeaders(new BrowserRelayResponse(202, [
             'accepted' => count($acceptedEvents),
             'rejected' => 0,
             'errors' => [],
-        ]);
+        ]));
     }
 
     /** @param array<string,string> $headers */
@@ -217,6 +229,18 @@ final class BrowserRelayHandler
     private function isSupportedContentType(?string $contentType): bool
     {
         return is_string($contentType) && str_contains(strtolower($contentType), 'application/json');
+    }
+
+    /** @return array<string, string> */
+    private function corsHeaders(string $origin): array
+    {
+        return [
+            'Access-Control-Allow-Origin' => $origin,
+            'Access-Control-Allow-Methods' => 'POST, OPTIONS',
+            'Access-Control-Allow-Headers' => 'content-type',
+            'Access-Control-Max-Age' => '600',
+            'Vary' => 'Origin',
+        ];
     }
 
     private function isRateLimited(?string $ipAddress): bool

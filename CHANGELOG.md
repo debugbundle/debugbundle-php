@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-05-29
+
+### Fixed
+- Added `OPTIONS /debugbundle/browser` preflight handling and matching CORS headers for explicitly allowed split-host browser relay traffic across the framework-agnostic, Laravel, and Symfony relay surfaces.
+
 ### Added
 - Added a repo-local `make smoke` app-driven release gate that builds a Composer archive, installs the package into a fresh consumer fixture, drives server capture plus Symfony relay forwarding against a mock ingestion endpoint, and is now reused by CI and the published-package release smoke.
 

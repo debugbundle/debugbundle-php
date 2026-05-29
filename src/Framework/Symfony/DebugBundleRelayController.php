@@ -28,7 +28,7 @@ final class DebugBundleRelayController
             'ipAddress' => $request->getClientIp(),
         ]);
 
-        return new JsonResponse($response->body, $response->status);
+        return new JsonResponse($response->body, $response->status, $response->headers);
     }
 
     /**

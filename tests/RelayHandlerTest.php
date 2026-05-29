@@ -150,6 +150,54 @@ final class RelayHandlerTest extends TestCase
         self::assertSame(1, $accepted);
     }
 
+    public function testAnswersAllowedCrossOriginPreflight(): void
+    {
+        $handler = new BrowserRelayHandler([
+            'allowedOrigins' => ['https://web.example.com'],
+        ]);
+
+        $response = $handler->handle([
+            'method' => 'OPTIONS',
+            'headers' => [
+                'host' => 'api.example.com',
+                'origin' => 'https://web.example.com',
+                'access-control-request-method' => 'POST',
+                'access-control-request-headers' => 'content-type',
+            ],
+            'body' => '',
+            'ipAddress' => '203.0.113.10',
+        ]);
+
+        self::assertSame(204, $response->status);
+        self::assertSame('https://web.example.com', $response->headers['Access-Control-Allow-Origin']);
+        self::assertSame('POST, OPTIONS', $response->headers['Access-Control-Allow-Methods']);
+    }
+
+    public function testAddsCorsHeadersToAcceptedCrossOriginPosts(): void
+    {
+        $handler = new BrowserRelayHandler([
+            'allowedOrigins' => ['https://web.example.com'],
+        ]);
+
+        $response = $handler->handle($this->createRequest(['batch' => []], [
+            'content-type' => 'application/json',
+            'host' => 'api.example.com',
+            'origin' => 'https://web.example.com',
+        ], '203.0.113.10', [[
+            'schema_version' => '2026-03-01',
+            'event_id' => '00000000-0000-4000-8000-000000000307',
+            'event_type' => 'frontend_exception',
+            'occurred_at' => '2026-03-31T10:00:00Z',
+            'sdk_version' => '1.2.3',
+            'service' => ['name' => 'checkout-web', 'environment' => 'production'],
+            'payload' => ['name' => 'TypeError', 'message' => 'broken'],
+        ]]));
+
+        self::assertSame(202, $response->status);
+        self::assertSame('https://web.example.com', $response->headers['Access-Control-Allow-Origin']);
+        self::assertSame('Origin', $response->headers['Vary']);
+    }
+
     public function testRejectsUnsupportedContentTypes(): void
     {
         $handler = new BrowserRelayHandler();
