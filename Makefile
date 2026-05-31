@@ -11,5 +11,5 @@ SMOKE_ARTIFACT := $(SMOKE_DIST_DIR)/debugbundle-sdk-php-smoke.zip
 smoke:
 	rm -rf "$(SMOKE_DIST_DIR)"
 	mkdir -p "$(SMOKE_DIST_DIR)"
-	$(COMPOSER) archive --format=zip --dir "$(SMOKE_DIST_DIR)" --file debugbundle-sdk-php-smoke
+	git archive --format=zip --output "$(SMOKE_ARTIFACT)" HEAD
 	$(PHP) smoke/run_app_driven_smoke.php --artifact "$(SMOKE_ARTIFACT)" --version "$(PACKAGE_VERSION)"
