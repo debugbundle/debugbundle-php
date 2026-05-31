@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-05-31
+
+### Changed
+- Declared the PHP SDK stable at `1.0.0` after release-hardening the public package, framework adapters, browser relay surfaces, and Packagist smoke coverage.
+- Aligned emitted PHP SDK event metadata so `sdk_version` now reports `1.0.0`.
+
 ## [0.1.10] - 2026-05-29
 
 ### Fixed

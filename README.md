@@ -302,7 +302,7 @@ That command builds a Composer archive, installs the package into a fresh consum
 For published-package verification during release validation, run the same smoke path against Packagist:
 
 ```bash
-php smoke/run_app_driven_smoke.php --package debugbundle/sdk-php:0.1.7
+php smoke/run_app_driven_smoke.php --package debugbundle/sdk-php:1.0.0
 ```
 
 For a manual verification snippet inside your own app:

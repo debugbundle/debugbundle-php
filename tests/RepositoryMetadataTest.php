@@ -72,7 +72,7 @@ final class RepositoryMetadataTest extends TestCase
         $security = (string) file_get_contents($securityPath);
 
         self::assertStringContainsString('## [Unreleased]', $changelog);
-        self::assertStringContainsString('## [0.1.0] - 2026-05-07', $changelog);
+        self::assertStringContainsString('## [1.0.0] - 2026-05-31', $changelog);
         self::assertStringContainsString('https://github.com/debugbundle/debugbundle-php/security/advisories/new', $security);
     }
 
