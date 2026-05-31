@@ -97,8 +97,11 @@ final class RelayTransportTest extends TestCase
         $forwardTransport = new RelayForwardTransport($transport);
 
         self::assertSame([true, true], $forwardTransport->send('dbundle_proj_test', [['event_type' => 'frontend_exception']]));
-        self::assertSame('dbundle_proj_test', $transport->request['project_token']);
-        self::assertSame('dbundle_proj_test', $transport->request['events'][0]['project_token']);
+        self::assertNotNull($transport->request);
+        /** @var array{project_token:string,events:list<array<string,mixed>>} $request */
+        $request = $transport->request;
+        self::assertSame('dbundle_proj_test', $request['project_token']);
+        self::assertSame('dbundle_proj_test', $request['events'][0]['project_token']);
     }
 
     public function testRelayForwardTransportReturnsFalseForNonSuccessStatus(): void
@@ -127,5 +130,27 @@ final class RelayTransportTest extends TestCase
         $forwardTransport = new RelayForwardTransport($transport);
 
         self::assertSame([true, false], $forwardTransport->send('dbundle_proj_test', [['event_type' => 'frontend_exception']]));
+    }
+
+    public function testRelayFileTransportPrivateHelpersSanitizeAndCleanUp(): void
+    {
+        $eventsDir = sys_get_temp_dir() . '/debugbundle-php-relay-private-' . bin2hex(random_bytes(4));
+        mkdir($eventsDir, 0700, true);
+        file_put_contents($eventsDir . '/orphan.tmp-deadbeef', 'temp');
+        file_put_contents($eventsDir . '/keep.events.json', '[]');
+
+        $transport = new RelayFileTransport($eventsDir, '///');
+
+        $sanitizeServiceName = new \ReflectionMethod(RelayFileTransport::class, 'sanitizeServiceName');
+        $sanitizeServiceName->setAccessible(true);
+        self::assertSame('service', $sanitizeServiceName->invoke(null, '///'));
+        self::assertSame('checkout-api', $sanitizeServiceName->invoke(null, ' checkout api '));
+
+        $cleanupTempFiles = new \ReflectionMethod(RelayFileTransport::class, 'cleanupTempFiles');
+        $cleanupTempFiles->setAccessible(true);
+        $cleanupTempFiles->invoke($transport);
+
+        self::assertFileDoesNotExist($eventsDir . '/orphan.tmp-deadbeef');
+        self::assertFileExists($eventsDir . '/keep.events.json');
     }
 }
