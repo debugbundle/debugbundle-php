@@ -261,12 +261,14 @@ final class DebugBundleSdkTest extends TestCase
         ]);
         $sdk->flush();
 
+        /** @var string $sdkVersion */
+        $sdkVersion = (new \ReflectionClass(DebugBundleSdk::class))->getConstant('SDK_VERSION');
         $events = $transport->calls[0]['events'];
         foreach ($events as $event) {
             self::assertSame('2026-03-01', $event['schema_version']);
             self::assertMatchesRegularExpression('/^[0-9a-f-]{36}$/', $event['event_id']);
             self::assertSame('debugbundle/sdk-php', $event['sdk_name']);
-            self::assertSame('0.1.9', $event['sdk_version']);
+            self::assertSame($sdkVersion, $event['sdk_version']);
             self::assertStringEndsWith('Z', $event['occurred_at']);
             self::assertSame([
                 'name' => 'checkout-api',
