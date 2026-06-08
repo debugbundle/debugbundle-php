@@ -780,7 +780,10 @@ final class DebugBundleSdk
             : $this->logLevel;
     }
 
-    /** @param array<string, mixed>|null $response */
+    /**
+     * @param array<string, mixed> $request
+     * @param array<string, mixed>|null $response
+     */
     private function shouldCaptureRequestEvent(array $request, ?array $response): bool
     {
         $statusCode = isset($response['status_code']) && is_numeric($response['status_code']) ? (int) $response['status_code'] : null;
@@ -856,7 +859,7 @@ final class DebugBundleSdk
         }
         $withoutQuery = explode('?', $value, 2)[0];
         $withoutFragment = explode('#', $withoutQuery, 2)[0];
-        return str_starts_with($withoutFragment, '/') && $withoutFragment !== '' ? $withoutFragment : '/';
+        return str_starts_with($withoutFragment, '/') ? $withoutFragment : '/';
     }
 
     private function passesSampleRate(): bool
