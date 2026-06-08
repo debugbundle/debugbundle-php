@@ -12,7 +12,7 @@ use Monolog\Logger;
 final class DebugBundleSdk
 {
     private const SDK_NAME = 'debugbundle/sdk-php';
-    private const SDK_VERSION = '1.0.0';
+    private const SDK_VERSION = '1.1.0';
     private const SCHEMA_VERSION = '2026-03-01';
     private const DEFAULT_ENDPOINT = 'https://api.debugbundle.com/v1/events';
     private const DEFAULT_BATCH_SIZE = 25;
@@ -26,9 +26,6 @@ final class DebugBundleSdk
     ];
     private const BALANCED_IMMEDIATE_REQUEST_STATUSES = [408, 423, 424, 425, 429];
     private const INVESTIGATIVE_IMMEDIATE_REQUEST_STATUSES = [408, 423, 424, 425, 429, 409];
-    private const BALANCED_STANDARD_ANOMALY_STATUSES = [401, 403, 404, 409, 422];
-    private const BALANCED_HIGH_VOLUME_ANOMALY_STATUSES = [400, 410];
-    private const INVESTIGATIVE_ANOMALY_STATUSES = [401, 403, 404, 409, 422, 400, 410];
 
     private ?TransportInterface $transportOverride;
     private ?TransportInterface $transport = null;
@@ -193,7 +190,7 @@ final class DebugBundleSdk
      */
     public function captureRequest(array $request, ?array $response = null, ?array $context = null): void
     {
-        if (!$this->enabled || !$this->passesSampleRate() || !$this->shouldCaptureRequestEvent($response)) {
+        if (!$this->enabled || !$this->passesSampleRate() || !$this->shouldCaptureRequestEvent($request, $response)) {
             return;
         }
 
@@ -784,22 +781,24 @@ final class DebugBundleSdk
     }
 
     /** @param array<string, mixed>|null $response */
-    private function shouldCaptureRequestEvent(?array $response): bool
+    private function shouldCaptureRequestEvent(array $request, ?array $response): bool
     {
         $statusCode = isset($response['status_code']) && is_numeric($response['status_code']) ? (int) $response['status_code'] : null;
-        if ($this->isImmediateRequestIncidentStatus($statusCode)) {
+        $requestPath = is_string($request['path'] ?? null) ? $request['path'] : (is_string($request['url'] ?? null) ? $request['url'] : null);
+        $httpMethod = is_string($request['method'] ?? null) ? $request['method'] : null;
+        if ($this->isImmediateRequestIncidentStatus($statusCode, $requestPath, $httpMethod)) {
             return true;
         }
 
         return match ($this->capturePolicy->captureRequestEvents) {
             'off' => false,
-            'failures_only' => $this->isRequestAnomalyCandidateStatus($statusCode),
+            'failures_only' => $statusCode !== null && $statusCode >= 500,
             'filtered' => false,
             default => true,
         };
     }
 
-    private function isImmediateRequestIncidentStatus(?int $statusCode): bool
+    private function isImmediateRequestIncidentStatus(?int $statusCode, ?string $requestPath = null, ?string $httpMethod = null): bool
     {
         if ($statusCode === null) {
             return false;
@@ -811,6 +810,9 @@ final class DebugBundleSdk
         if (in_array($statusCode, $this->capturePolicy->immediateClientErrorStatuses, true)) {
             return true;
         }
+        if ($this->matchesImmediateClientErrorPathRule($statusCode, $requestPath, $httpMethod)) {
+            return true;
+        }
 
         return match ($this->capturePolicy->preset) {
             'investigative' => in_array($statusCode, self::INVESTIGATIVE_IMMEDIATE_REQUEST_STATUSES, true),
@@ -819,18 +821,42 @@ final class DebugBundleSdk
         };
     }
 
-    private function isRequestAnomalyCandidateStatus(?int $statusCode): bool
+    private function matchesImmediateClientErrorPathRule(int $statusCode, ?string $requestPath, ?string $httpMethod): bool
     {
-        if ($statusCode === null || $statusCode < 400 || $statusCode >= 500) {
+        if ($statusCode < 400 || $statusCode > 499 || $requestPath === null) {
             return false;
         }
 
-        return match ($this->capturePolicy->preset) {
-            'investigative' => in_array($statusCode, self::INVESTIGATIVE_ANOMALY_STATUSES, true),
-            'balanced' => in_array($statusCode, self::BALANCED_STANDARD_ANOMALY_STATUSES, true)
-                || in_array($statusCode, self::BALANCED_HIGH_VOLUME_ANOMALY_STATUSES, true),
-            default => false,
-        };
+        $normalizedPath = $this->normalizeRequestPath($requestPath);
+        $normalizedMethod = $httpMethod === null ? null : strtoupper($httpMethod);
+        foreach ($this->capturePolicy->immediateClientErrorPathRules as $rule) {
+            if ($rule->statusCode !== $statusCode) {
+                continue;
+            }
+            if ($rule->methods !== [] && ($normalizedMethod === null || !in_array($normalizedMethod, $rule->methods, true))) {
+                continue;
+            }
+            if (str_ends_with($rule->pathPattern, '*')) {
+                if (str_starts_with($normalizedPath, substr($rule->pathPattern, 0, -1))) {
+                    return true;
+                }
+            } elseif ($normalizedPath === $rule->pathPattern) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function normalizeRequestPath(string $value): string
+    {
+        $path = parse_url($value, PHP_URL_PATH);
+        if (is_string($path) && $path !== '') {
+            return $path;
+        }
+        $withoutQuery = explode('?', $value, 2)[0];
+        $withoutFragment = explode('#', $withoutQuery, 2)[0];
+        return str_starts_with($withoutFragment, '/') && $withoutFragment !== '' ? $withoutFragment : '/';
     }
 
     private function passesSampleRate(): bool

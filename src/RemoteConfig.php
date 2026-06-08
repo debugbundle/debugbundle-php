@@ -6,7 +6,10 @@ namespace DebugBundle;
 
 final class CapturePolicy
 {
-    /** @param list<int> $immediateClientErrorStatuses */
+    /**
+     * @param list<int> $immediateClientErrorStatuses
+     * @param list<ImmediateClientErrorPathRule> $immediateClientErrorPathRules
+     */
     public function __construct(
         public readonly string $preset,
         public readonly string $captureLogs,
@@ -14,6 +17,18 @@ final class CapturePolicy
         public readonly string $captureBreadcrumbs,
         public readonly string $captureProbeEvents,
         public readonly array $immediateClientErrorStatuses,
+        public readonly array $immediateClientErrorPathRules = [],
+    ) {
+    }
+}
+
+final class ImmediateClientErrorPathRule
+{
+    /** @param list<string> $methods */
+    public function __construct(
+        public readonly int $statusCode,
+        public readonly string $pathPattern,
+        public readonly array $methods,
     ) {
     }
 }
@@ -168,6 +183,7 @@ final class RemoteConfig
         $captureBreadcrumbs = self::asNonEmptyString($payload['capture_breadcrumbs'] ?? null);
         $captureProbeEvents = self::asNonEmptyString($payload['capture_probe_events'] ?? null);
         $immediateClientErrorStatuses = self::parseImmediateClientErrorStatuses($payload['immediate_client_error_statuses'] ?? null);
+        $immediateClientErrorPathRules = self::parseImmediateClientErrorPathRules($payload['immediate_client_error_path_rules'] ?? null);
 
         if (!in_array($captureLogs, ['off', 'error', 'warning', 'info'], true)) {
             return null;
@@ -181,7 +197,7 @@ final class RemoteConfig
         if (!in_array($captureProbeEvents, ['buffer_only', 'standalone_when_activated'], true)) {
             return null;
         }
-        if ($immediateClientErrorStatuses === null) {
+        if ($immediateClientErrorStatuses === null || $immediateClientErrorPathRules === null) {
             return null;
         }
 
@@ -192,6 +208,7 @@ final class RemoteConfig
             $captureBreadcrumbs,
             $captureProbeEvents,
             $immediateClientErrorStatuses,
+            $immediateClientErrorPathRules,
         );
     }
 
@@ -217,6 +234,61 @@ final class RemoteConfig
         sort($statuses, SORT_NUMERIC);
 
         return $statuses;
+    }
+
+    /** @return list<ImmediateClientErrorPathRule>|null */
+    private static function parseImmediateClientErrorPathRules(mixed $value): ?array
+    {
+        if ($value === null) {
+            return [];
+        }
+        if (!is_array($value) || count($value) > 25) {
+            return null;
+        }
+
+        $rules = [];
+        foreach ($value as $item) {
+            if (!is_array($item)) {
+                return null;
+            }
+            $statusCode = $item['status_code'] ?? null;
+            $pathPattern = $item['path_pattern'] ?? null;
+            $rawMethods = $item['methods'] ?? [];
+            if (
+                !is_int($statusCode)
+                || $statusCode < 400
+                || $statusCode > 499
+                || !is_string($pathPattern)
+                || !self::isValidPathPattern($pathPattern)
+                || !is_array($rawMethods)
+                || count($rawMethods) > 7
+            ) {
+                return null;
+            }
+
+            $methods = [];
+            foreach ($rawMethods as $rawMethod) {
+                $method = is_string($rawMethod) ? strtoupper($rawMethod) : '';
+                if (!in_array($method, ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'], true)) {
+                    return null;
+                }
+                if (!in_array($method, $methods, true)) {
+                    $methods[] = $method;
+                }
+            }
+            $rules[] = new ImmediateClientErrorPathRule($statusCode, $pathPattern, $methods);
+        }
+
+        return $rules;
+    }
+
+    private static function isValidPathPattern(string $value): bool
+    {
+        if ($value === '' || strlen($value) > 256 || !str_starts_with($value, '/') || str_contains($value, '?') || str_contains($value, '#')) {
+            return false;
+        }
+        $wildcardIndex = strpos($value, '*');
+        return $wildcardIndex === false || $wildcardIndex === strlen($value) - 1;
     }
 
     private static function parseDirective(mixed $payload): ?RemoteProbeDirective

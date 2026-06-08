@@ -52,7 +52,7 @@ final class RepositoryMetadataTest extends TestCase
         self::assertFileExists($workflowPath);
 
         $workflow = (string) file_get_contents($workflowPath);
-        self::assertStringContainsString('actions/checkout@v4', $workflow);
+        self::assertStringContainsString('actions/checkout@v6', $workflow);
         self::assertStringContainsString('shivammathur/setup-php@v2', $workflow);
         self::assertStringContainsString('composer validate --strict', $workflow);
         self::assertStringContainsString('composer install --no-interaction --prefer-dist', $workflow);
@@ -72,7 +72,7 @@ final class RepositoryMetadataTest extends TestCase
         $security = (string) file_get_contents($securityPath);
 
         self::assertStringContainsString('## [Unreleased]', $changelog);
-        self::assertStringContainsString('## [1.0.0] - 2026-05-31', $changelog);
+        self::assertStringContainsString('## [1.1.0] - 2026-06-08', $changelog);
         self::assertStringContainsString('https://github.com/debugbundle/debugbundle-php/security/advisories/new', $security);
     }
 

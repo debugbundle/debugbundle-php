@@ -213,7 +213,7 @@ final class RemoteConfigTest extends TestCase
         self::assertSame(503, $transport->calls[0]['events'][1]['payload']['response_status']);
     }
 
-    public function testBalancedCapturePolicyKeepsRequestFailureAnomalyCandidates(): void
+    public function testBalancedCapturePolicyKeepsImmediateFailuresButNotUnconfigured4xx(): void
     {
         $clock = new ManualClock();
         $fetcher = new FakeConfigFetcher([
@@ -251,7 +251,53 @@ final class RemoteConfigTest extends TestCase
             $transport->calls[0]['events'],
             static fn (array $event): bool => $event['event_type'] === 'request_event'
         ));
-        self::assertSame([429, 404, 409], array_map(static fn (array $event): int => $event['payload']['response_status'], $requestEvents));
+        self::assertSame([429], array_map(static fn (array $event): int => $event['payload']['response_status'], $requestEvents));
+    }
+
+    public function testCapturePolicyPromotesConfiguredClientErrorPathRulesWhenRequestCaptureIsOff(): void
+    {
+        $clock = new ManualClock();
+        $fetcher = new FakeConfigFetcher([
+            new FakeConfigResponse(200, [
+                'probes_enabled' => true,
+                'remote_probes_enabled' => true,
+                'active_probes' => [],
+                'poll_interval_ms' => 15000,
+                'capture_policy' => [
+                    'preset' => 'minimal',
+                    'capture_logs' => 'error',
+                    'capture_request_events' => 'off',
+                    'capture_breadcrumbs' => 'local_only',
+                    'capture_probe_events' => 'buffer_only',
+                    'immediate_client_error_path_rules' => [
+                        ['status_code' => 404, 'path_pattern' => '/checkout/*', 'methods' => ['POST']],
+                    ],
+                ],
+            ]),
+        ]);
+        $transport = new FakeTransport();
+        $sdk = new DebugBundleSdk($transport, [$clock, 'time']);
+        $this->sdk = $sdk;
+        $sdk->init([
+            'projectToken' => 'dbundle_proj_test',
+            'service' => 'checkout-api',
+            'environment' => 'production',
+            'configFetcher' => $fetcher,
+        ]);
+
+        $sdk->captureRequest(['method' => 'POST', 'path' => '/checkout/cart', 'headers' => []], ['status_code' => 404]);
+        $sdk->captureRequest(['method' => 'GET', 'path' => '/checkout/cart', 'headers' => []], ['status_code' => 404]);
+        $sdk->captureRequest(['method' => 'POST', 'path' => '/robots.txt', 'headers' => []], ['status_code' => 404]);
+        $sdk->flush();
+
+        self::assertCount(1, $transport->calls);
+        $requestEvents = array_values(array_filter(
+            $transport->calls[0]['events'],
+            static fn (array $event): bool => $event['event_type'] === 'request_event'
+        ));
+        self::assertCount(1, $requestEvents);
+        self::assertSame('/checkout/cart', $requestEvents[0]['payload']['path']);
+        self::assertSame(404, $requestEvents[0]['payload']['response_status']);
     }
 
     public function testInvestigativeCapturePolicyPromotes409EvenWhenRequestCaptureIsOff(): void
