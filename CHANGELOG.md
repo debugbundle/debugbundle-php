@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-06-19
+
+### Fixed
+- Release quality gates so the published PHP SDK patch ships with clean static-analysis metadata and unchanged runtime behavior.
+
 ## [1.1.1] - 2026-06-19
 
 ### Fixed

@@ -12,7 +12,7 @@ use Monolog\Logger;
 final class DebugBundleSdk
 {
     private const SDK_NAME = 'debugbundle/sdk-php';
-    private const SDK_VERSION = '1.1.1';
+    private const SDK_VERSION = '1.1.2';
     private const SCHEMA_VERSION = '2026-03-01';
     private const DEFAULT_ENDPOINT = 'https://api.debugbundle.com/v1/events';
     private const DEFAULT_BATCH_SIZE = 25;
@@ -589,6 +589,7 @@ final class DebugBundleSdk
 
     /**
      * @param array<string, mixed> $payload
+     * @param array<string, mixed> $context
      * @return array<string, mixed>
      */
     private function baseEvent(string $eventType, array $payload, array $context = []): array
@@ -638,8 +639,8 @@ final class DebugBundleSdk
         return $context;
     }
 
-    /** @return array<string, mixed>|null */
-    private function buildRequestPayload(mixed $request): ?array
+    /** @return array<string, mixed> */
+    private function buildRequestPayload(mixed $request): array
     {
         if (!is_array($request)) {
             return [
@@ -659,8 +660,8 @@ final class DebugBundleSdk
         ];
     }
 
-    /** @return array<string, mixed>|null */
-    private function buildResponsePayload(mixed $response): ?array
+    /** @return array<string, mixed> */
+    private function buildResponsePayload(mixed $response): array
     {
         if (!is_array($response)) {
             return [
@@ -698,7 +699,10 @@ final class DebugBundleSdk
         ];
     }
 
-    /** @return array<string, string|null> */
+    /**
+     * @param array<string, mixed> $context
+     * @return array<string, string|null>
+     */
     private function buildCorrelation(array $context = []): array
     {
         return [

@@ -72,7 +72,12 @@ final class RepositoryMetadataTest extends TestCase
         $security = (string) file_get_contents($securityPath);
 
         self::assertStringContainsString('## [Unreleased]', $changelog);
-        self::assertStringContainsString('## [1.1.1] - 2026-06-19
+        self::assertStringContainsString('## [1.1.2] - 2026-06-19
+
+### Fixed
+- Release quality gates so the published PHP SDK patch ships with clean static-analysis metadata and unchanged runtime behavior.
+
+## [1.1.1] - 2026-06-19
 
 ### Fixed
 - Normalized canonical event-envelope emission so custom app context now stays in envelope `context`, request events avoid legacy payload extras, and installed projects stop tripping malformed ingestion rejects after upgrade.
