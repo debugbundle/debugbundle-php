@@ -12,7 +12,7 @@ use Monolog\Logger;
 final class DebugBundleSdk
 {
     private const SDK_NAME = 'debugbundle/sdk-php';
-    private const SDK_VERSION = '1.1.0';
+    private const SDK_VERSION = '1.1.1';
     private const SCHEMA_VERSION = '2026-03-01';
     private const DEFAULT_ENDPOINT = 'https://api.debugbundle.com/v1/events';
     private const DEFAULT_BATCH_SIZE = 25;
@@ -180,7 +180,7 @@ final class DebugBundleSdk
             'attributes' => $this->normalizeMap($this->redactArray($context ?? [])),
         ];
 
-        $this->enqueueEvent($this->baseEvent('log_event', $payload));
+        $this->enqueueEvent($this->baseEvent('log_event', $payload, $context ?? []));
     }
 
     /**
@@ -203,14 +203,11 @@ final class DebugBundleSdk
             'path' => (string) ($redactedRequest['path'] ?? '/'),
             'query' => $this->normalizeMap(is_array($redactedRequest['query'] ?? null) ? $redactedRequest['query'] : []),
             'headers' => $this->normalizeMap(is_array($redactedRequest['headers'] ?? null) ? $redactedRequest['headers'] : []),
-            'response_status' => isset($redactedResponse['status_code']) ? (int) $redactedResponse['status_code'] : null,
-            'duration_ms' => isset($redactedResponse['duration_ms']) ? (int) $redactedResponse['duration_ms'] : null,
+            'response_status' => isset($redactedResponse['status_code']) ? (int) $redactedResponse['status_code'] : 0,
+            'duration_ms' => isset($redactedResponse['duration_ms']) ? max(0, (int) $redactedResponse['duration_ms']) : 0,
         ];
 
-        $event = $this->baseEvent('request_event', $payload);
-        if ($redactedContext !== []) {
-            $event['context'] = $redactedContext;
-        }
+        $event = $this->baseEvent('request_event', $payload, $redactedContext);
 
         $this->enqueueEvent($event);
     }
@@ -565,7 +562,7 @@ final class DebugBundleSdk
             }
         }
 
-        $event = $this->baseEvent('backend_exception', $payload);
+        $event = $this->baseEvent('backend_exception', $payload, $redactedContext);
         $suppressionKey = sprintf('backend_exception:%s:%s:%s', $payload['name'], $payload['message'], $payload['stack']);
         if (!$this->suppression->shouldCapture($suppressionKey, $this->now())) {
             return;
@@ -594,8 +591,9 @@ final class DebugBundleSdk
      * @param array<string, mixed> $payload
      * @return array<string, mixed>
      */
-    private function baseEvent(string $eventType, array $payload): array
+    private function baseEvent(string $eventType, array $payload, array $context = []): array
     {
+        $mergedContext = array_merge($this->context, $this->redactArray($context));
         $event = [
             'schema_version' => self::SCHEMA_VERSION,
             'event_id' => $this->uuidV4(),
@@ -609,22 +607,47 @@ final class DebugBundleSdk
                 'framework' => null,
                 'environment' => $this->environment,
             ],
-            'correlation' => $this->buildCorrelation(),
+            'correlation' => $this->buildCorrelation($mergedContext),
             'payload' => $payload,
         ];
 
-        if ($this->context !== []) {
-            $event['context'] = $this->context;
+        $eventContext = $this->eventContext($mergedContext);
+        if ($eventContext !== []) {
+            $event['context'] = $eventContext;
         }
 
         return $event;
+    }
+
+    /**
+     * @param array<string, mixed> $context
+     * @return array<string, mixed>
+     */
+    private function eventContext(array $context): array
+    {
+        unset(
+            $context['request'],
+            $context['response'],
+            $context['correlation'],
+            $context['request_id'],
+            $context['trace_id'],
+            $context['session_id'],
+            $context['user_id_hash']
+        );
+
+        return $context;
     }
 
     /** @return array<string, mixed>|null */
     private function buildRequestPayload(mixed $request): ?array
     {
         if (!is_array($request)) {
-            return null;
+            return [
+                'method' => 'UNKNOWN',
+                'path' => '/',
+                'headers' => [],
+                'query' => [],
+            ];
         }
 
         return [
@@ -640,11 +663,13 @@ final class DebugBundleSdk
     private function buildResponsePayload(mixed $response): ?array
     {
         if (!is_array($response)) {
-            return null;
+            return [
+                'status_code' => 0,
+            ];
         }
 
         return [
-            'status_code' => isset($response['status_code']) ? (int) $response['status_code'] : null,
+            'status_code' => isset($response['status_code']) ? (int) $response['status_code'] : 0,
         ];
     }
 
@@ -674,13 +699,13 @@ final class DebugBundleSdk
     }
 
     /** @return array<string, string|null> */
-    private function buildCorrelation(): array
+    private function buildCorrelation(array $context = []): array
     {
         return [
-            'request_id' => $this->readContextString('request_id') ?? ($this->requestCorrelation['request_id'] ?? null),
-            'trace_id' => $this->readContextString('trace_id') ?? ($this->requestCorrelation['trace_id'] ?? null),
-            'session_id' => $this->readContextString('session_id'),
-            'user_id_hash' => $this->readContextString('user_id_hash'),
+            'request_id' => $this->readContextString('request_id', $context) ?? ($this->requestCorrelation['request_id'] ?? null),
+            'trace_id' => $this->readContextString('trace_id', $context) ?? ($this->requestCorrelation['trace_id'] ?? null),
+            'session_id' => $this->readContextString('session_id', $context),
+            'user_id_hash' => $this->readContextString('user_id_hash', $context),
         ];
     }
 
@@ -892,9 +917,10 @@ final class DebugBundleSdk
         };
     }
 
-    private function readContextString(string $key): ?string
+    /** @param array<string, mixed>|null $context */
+    private function readContextString(string $key, ?array $context = null): ?string
     {
-        $value = $this->context[$key] ?? null;
+        $value = ($context ?? $this->context)[$key] ?? null;
         return is_string($value) ? $value : null;
     }
 
