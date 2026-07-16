@@ -19,6 +19,7 @@ final class BrowserRelayHandler
         'frontend_breadcrumb',
         'request_event',
         'probe_event',
+        'analytics_event',
     ];
 
     /** @var list<string> */
@@ -274,8 +275,14 @@ final class BrowserRelayHandler
 
         $correlation = [];
         if (isset($event['correlation']) && is_array($event['correlation'])) {
-            foreach (['request_id', 'trace_id', 'session_id', 'user_id_hash'] as $key) {
-                $value = $event['correlation'][$key] ?? null;
+            $correlationKeys = $eventType === 'analytics_event'
+                ? ['session_id', 'visitor_id_hash', 'user_id_hash', 'trace_id', 'deploy_id']
+                : ['request_id', 'trace_id', 'session_id', 'user_id_hash'];
+            foreach ($correlationKeys as $key) {
+                if (!array_key_exists($key, $event['correlation'])) {
+                    continue;
+                }
+                $value = $event['correlation'][$key];
                 if (is_string($value) || $value === null) {
                     $correlation[$key] = $value;
                 }

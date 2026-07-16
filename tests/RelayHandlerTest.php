@@ -15,6 +15,24 @@ final class RelayHandlerTest extends TestCase
     /** @var array{version:int,cases:list<array<string,mixed>>}|null */
     private static ?array $relayComplianceFixtures = null;
 
+    public function testAcceptsAnalyticsEventsAndPreservesAnalyticsCorrelation(): void
+    {
+        $fixture = self::relayComplianceFixture('valid-analytics-event');
+        $acceptedBatch = null;
+        $handler = new BrowserRelayHandler([
+            'onAccept' => static function (BrowserRelayAcceptedBatch $batch) use (&$acceptedBatch): void {
+                $acceptedBatch = $batch;
+            },
+        ]);
+
+        $response = $handler->handle($this->createRequestFromFixture($fixture['request']));
+
+        self::assertSame(202, $response->status);
+        self::assertInstanceOf(BrowserRelayAcceptedBatch::class, $acceptedBatch);
+        self::assertEquals($fixture['expectedEventFile'][0], $acceptedBatch->events[0]);
+        self::assertArrayNotHasKey('project_token', $acceptedBatch->events[0]);
+    }
+
     public function testAcceptsValidBrowserEventsAndStripsTrustSensitiveFields(): void
     {
         /** @var array{request: array{method?:string,headers?:array<string,string>,bodyJson?:mixed,bodyText?:string,ipAddress?:string}, expected: array{status:int,accepted:int,rejected:int,errors:list<string>}, expectedEventFile: list<array<string,mixed>>} $fixture */
