@@ -31,7 +31,7 @@ final class RelayFileTransport
         try {
             if (!$this->dirEnsured) {
                 if (!is_dir($this->eventsDir)) {
-                    mkdir($this->eventsDir, self::LOCAL_EVENTS_DIRECTORY_MODE, true);
+                    @mkdir($this->eventsDir, self::LOCAL_EVENTS_DIRECTORY_MODE, true);
                 }
                 $this->dirEnsured = true;
             }
@@ -92,7 +92,7 @@ final class RelayFileTransport
 
     private function writeSecureTempFile(string $tmpPath, string $payload): void
     {
-        $handle = fopen($tmpPath, 'xb');
+        $handle = @fopen($tmpPath, 'xb');
         if ($handle === false) {
             throw new \RuntimeException('temp_file_create_failed');
         }

@@ -142,12 +142,10 @@ final class RelayTransportTest extends TestCase
         $transport = new RelayFileTransport($eventsDir, '///');
 
         $sanitizeServiceName = new \ReflectionMethod(RelayFileTransport::class, 'sanitizeServiceName');
-        $sanitizeServiceName->setAccessible(true);
         self::assertSame('service', $sanitizeServiceName->invoke(null, '///'));
         self::assertSame('checkout-api', $sanitizeServiceName->invoke(null, ' checkout api '));
 
         $cleanupTempFiles = new \ReflectionMethod(RelayFileTransport::class, 'cleanupTempFiles');
-        $cleanupTempFiles->setAccessible(true);
         $cleanupTempFiles->invoke($transport);
 
         self::assertFileDoesNotExist($eventsDir . '/orphan.tmp-deadbeef');

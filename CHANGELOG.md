@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-07-16
+
+### Added
+- Accepted canonical browser `analytics_event` envelopes through the framework relay, preserving the same validation, origin controls, rate limits, and durable delivery behavior as existing browser events.
+
+### Fixed
+- Suppressed expected filesystem-race warnings in the relay spool while retaining explicit failure handling when secure spool writes cannot be created.
+
 ## [1.1.2] - 2026-06-19
 
 ### Fixed
