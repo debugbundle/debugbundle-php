@@ -239,6 +239,115 @@ final class DebugBundleSdkTest extends TestCase
         self::assertSame('[REDACTED]', $probeData['items'][0]['data']['secret']);
     }
 
+    public function testWrapsListScalarAndNullProbeDataBeforeBuffering(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = new DebugBundleSdk($transport);
+        $this->sdk = $sdk;
+        $sdk->init([
+            'projectToken' => 'dbundle_proj_test',
+            'service' => 'checkout-api',
+            'environment' => 'production',
+        ]);
+
+        $sdk->probe('list', ['first', 'second']);
+        $sdk->probe('scalar', 42);
+        $sdk->probe('null', null);
+        $sdk->captureException(new \RuntimeException('checkout failed'));
+        $sdk->flush();
+
+        $items = $transport->calls[0]['events'][0]['payload']['probe_data']['items'];
+        self::assertSame(['value' => ['first', 'second']], $items[0]['data']);
+        self::assertSame(['value' => 42], $items[1]['data']);
+        self::assertSame(['value' => null], $items[2]['data']);
+    }
+
+    public function testProbeCallbackFailureNeverEscapesIntoHostCode(): void
+    {
+        $sdk = new DebugBundleSdk(new FakeTransport());
+        $this->sdk = $sdk;
+        $sdk->init(['projectToken' => 'dbundle_proj_test']);
+
+        $sdk->probe('unsafe', static function (): never {
+            throw new \RuntimeException('callback failed');
+        });
+
+        self::assertSame('healthy', $sdk->getStatus());
+    }
+
+    public function testBeforeSendRunsAfterRedactionAndMutatesBeforeQueueing(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = new DebugBundleSdk($transport);
+        $this->sdk = $sdk;
+        $observedPassword = null;
+        $sdk->init([
+            'projectToken' => 'dbundle_proj_test',
+            'beforeSend' => static function (array $event) use (&$observedPassword): array {
+                $observedPassword = $event['context']['password'] ?? null;
+                $event['payload']['message'] = 'mutated';
+                return $event;
+            },
+        ]);
+
+        $sdk->captureMessage('original', 'error', ['password' => 'secret']);
+        $sdk->flush();
+
+        self::assertSame('[REDACTED]', $observedPassword);
+        self::assertSame('mutated', $transport->calls[0]['events'][0]['payload']['message']);
+    }
+
+    public function testBeforeSendDropInvalidFailureAndSamplingAreSafe(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = new DebugBundleSdk($transport);
+        $this->sdk = $sdk;
+        $calls = 0;
+        $sdk->init([
+            'projectToken' => 'dbundle_proj_test',
+            'beforeSend' => static function (array $event) use (&$calls): null {
+                $calls++;
+                return null;
+            },
+        ]);
+        $sdk->captureMessage('drop', 'error');
+        $sdk->flush();
+        self::assertSame(1, $calls);
+        self::assertCount(0, $transport->calls);
+
+        $sdk->init([
+            'projectToken' => 'dbundle_proj_test',
+            'beforeSend' => static fn (array $event): array => ['invalid' => true],
+        ]);
+        $sdk->captureMessage('preserve invalid', 'error');
+        $sdk->flush();
+        self::assertSame('preserve invalid', $transport->calls[0]['events'][0]['payload']['message']);
+
+        $sdk->init([
+            'projectToken' => 'dbundle_proj_test',
+            'beforeSend' => static function (array $event): never {
+                throw new \RuntimeException('hook failed');
+            },
+        ]);
+        $sdk->captureMessage('preserve failure', 'error');
+        $sdk->flush();
+        self::assertSame('preserve failure', $transport->calls[1]['events'][0]['payload']['message']);
+
+        $sampledCalls = 0;
+        $sdk->init([
+            'projectToken' => 'dbundle_proj_test',
+            'sampleRate' => 0,
+            'beforeSend' => static function (array $event) use (&$sampledCalls): array {
+                $sampledCalls++;
+                return $event;
+            },
+        ]);
+        $sdk->captureMessage('sampled out', 'error');
+        $sdk->flush();
+        self::assertSame(1, $sampledCalls);
+        self::assertCount(2, $transport->calls);
+    }
+
     public function testEmitsContractShapedEventEnvelopes(): void
     {
         $transport = new FakeTransport();
@@ -409,6 +518,95 @@ final class DebugBundleSdkTest extends TestCase
         $sdk->captureException(new \RuntimeException('test'));
         $sdk->flush();
         self::assertSame('degraded', $sdk->getStatus());
+    }
+
+    public function testRetriesOnlyIndexedRetryableIngestionRejections(): void
+    {
+        $clock = new ManualClock();
+        $transport = new FakeTransport([
+            new TransportResponse(202, 1_000, [
+                'accepted' => 1,
+                'rejected' => 1,
+                'errors' => [['index' => 1, 'reason' => 'rate_limited']],
+            ]),
+            new TransportResponse(202, null, [
+                'accepted' => 1,
+                'rejected' => 0,
+                'errors' => [],
+            ]),
+        ]);
+        $sdk = new DebugBundleSdk($transport, fn () => $clock->time());
+        $this->sdk = $sdk;
+        $sdk->init(['projectToken' => 'dbundle_proj_test', 'service' => 'test', 'environment' => 'test']);
+        $sdk->captureMessage('accepted', 'error');
+        $sdk->captureMessage('retry', 'error');
+
+        $sdk->flush();
+        self::assertSame('degraded', $sdk->getStatus());
+        self::assertNotNull($sdk->getLastEventAt());
+
+        $clock->advance(1.001);
+        $sdk->flush();
+        self::assertSame(
+            ['retry'],
+            array_map(
+                static fn (array $event): string => $event['payload']['message'],
+                $transport->calls[1]['events']
+            )
+        );
+        self::assertSame('healthy', $sdk->getStatus());
+    }
+
+    public function testAllTerminalRejectionsDoNotAdvanceDeliveryState(): void
+    {
+        $transport = new FakeTransport([
+            new TransportResponse(202, null, [
+                'accepted' => 0,
+                'rejected' => 1,
+                'errors' => [['index' => 0, 'reason' => 'capture_policy_rejected']],
+            ]),
+        ]);
+        $sdk = new DebugBundleSdk($transport);
+        $this->sdk = $sdk;
+        $sdk->init(['projectToken' => 'dbundle_proj_test', 'service' => 'test', 'environment' => 'test']);
+        $sdk->captureMessage('terminal', 'error');
+
+        $sdk->flush();
+        $sdk->flush();
+
+        self::assertSame('disconnected', $sdk->getStatus());
+        self::assertNull($sdk->getLastEventAt());
+        self::assertCount(1, $transport->calls);
+    }
+
+    public function testInconsistentAcknowledgementRetainsFullBatch(): void
+    {
+        $clock = new ManualClock();
+        $transport = new FakeTransport([
+            new TransportResponse(202, 1_000, [
+                'accepted' => 1,
+                'rejected' => 0,
+                'errors' => [],
+            ]),
+            new TransportResponse(202, null, [
+                'accepted' => 2,
+                'rejected' => 0,
+                'errors' => [],
+            ]),
+        ]);
+        $sdk = new DebugBundleSdk($transport, fn () => $clock->time());
+        $this->sdk = $sdk;
+        $sdk->init(['projectToken' => 'dbundle_proj_test', 'service' => 'test', 'environment' => 'test']);
+        $sdk->captureMessage('first', 'error');
+        $sdk->captureMessage('second', 'error');
+
+        $sdk->flush();
+        self::assertSame('degraded', $sdk->getStatus());
+        self::assertNull($sdk->getLastEventAt());
+
+        $clock->advance(1.001);
+        $sdk->flush();
+        self::assertCount(2, $transport->calls[1]['events']);
     }
 
     public function testStatusRecoversToHealthyAfterDegraded(): void

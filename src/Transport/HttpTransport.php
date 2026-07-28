@@ -35,7 +35,7 @@ final class HttpTransport implements TransportInterface
         $statusCode = 500;
         $retryAfterMs = null;
         $metadata = stream_get_meta_data($stream);
-        @stream_get_contents($stream);
+        $responseBody = @stream_get_contents($stream);
         fclose($stream);
         $responseHeaders = self::normalizeResponseHeaders($metadata['wrapper_data'] ?? []);
 
@@ -53,7 +53,16 @@ final class HttpTransport implements TransportInterface
             }
         }
 
-        return new TransportResponse($statusCode, $retryAfterMs);
+        $decodedBody = null;
+        if (is_string($responseBody) && $responseBody !== '') {
+            try {
+                $decodedBody = json_decode($responseBody, true, 512, JSON_THROW_ON_ERROR);
+            } catch (\JsonException) {
+                $decodedBody = null;
+            }
+        }
+
+        return new TransportResponse($statusCode, $retryAfterMs, $decodedBody);
     }
 
     /** @return list<string> */

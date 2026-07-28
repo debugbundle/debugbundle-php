@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace DebugBundle;
 
+use DebugBundle\Transport\IngestionAcknowledgementDecision;
 use DebugBundle\Logging\DebugBundleHandler;
 use DebugBundle\Transport\HttpTransport;
 use DebugBundle\Transport\TransportInterface;
@@ -11,8 +12,11 @@ use Monolog\Logger;
 
 final class DebugBundleSdk
 {
+    use DebugBundleSdkEventSupport;
+    use DebugBundleSdkPolicySupport;
+
     private const SDK_NAME = 'debugbundle/sdk-php';
-    private const SDK_VERSION = '1.2.0';
+    private const SDK_VERSION = '1.3.0';
     private const SCHEMA_VERSION = '2026-03-01';
     private const DEFAULT_ENDPOINT = 'https://api.debugbundle.com/v1/events';
     private const DEFAULT_BATCH_SIZE = 25;
@@ -53,6 +57,7 @@ final class DebugBundleSdk
     private \Closure $timeProvider;
 
     private ?\Closure $configFetcher = null;
+    private ?\Closure $beforeSend = null;
     private int $configuredProbesPollIntervalMs = RemoteConfig::DEFAULT_PROBES_POLL_INTERVAL_MS;
     private ?string $remoteConfigEtag = null;
     private ?RemoteConfigSnapshot $remoteConfigSnapshot = null;
@@ -129,6 +134,9 @@ final class DebugBundleSdk
         $this->configFetcher = isset($config['configFetcher']) && is_callable($config['configFetcher'])
             ? \Closure::fromCallable($config['configFetcher'])
             : null;
+        $this->beforeSend = isset($config['beforeSend']) && is_callable($config['beforeSend'])
+            ? \Closure::fromCallable($config['beforeSend'])
+            : null;
         $this->configuredProbesPollIntervalMs = max(1, (int) ($config['probesPollInterval'] ?? RemoteConfig::DEFAULT_PROBES_POLL_INTERVAL_MS));
         $this->remoteConfigEtag = null;
         $this->remoteConfigSnapshot = null;
@@ -165,12 +173,7 @@ final class DebugBundleSdk
     public function captureLog(string $message, string $level = self::DEFAULT_LOG_LEVEL, ?array $context = null): void
     {
         $normalizedLevel = $this->normalizeLevel($level);
-        if (
-            !$this->enabled
-            || !$this->passesSampleRate()
-            || $this->capturePolicy->captureLogs === 'off'
-            || !$this->levelEnabled($normalizedLevel, $this->effectiveLogThreshold())
-        ) {
+        if (!$this->enabled) {
             return;
         }
 
@@ -180,7 +183,17 @@ final class DebugBundleSdk
             'attributes' => $this->normalizeMap($this->redactArray($context ?? [])),
         ];
 
-        $this->enqueueEvent($this->baseEvent('log_event', $payload, $context ?? []));
+        $event = $this->applyBeforeSend($this->baseEvent('log_event', $payload, $context ?? []));
+        if (
+            $event === null
+            || !$this->passesSampleRate()
+            || $this->capturePolicy->captureLogs === 'off'
+            || !$this->levelEnabled($normalizedLevel, $this->effectiveLogThreshold())
+        ) {
+            return;
+        }
+
+        $this->enqueueEvent($event);
     }
 
     /**
@@ -190,7 +203,7 @@ final class DebugBundleSdk
      */
     public function captureRequest(array $request, ?array $response = null, ?array $context = null): void
     {
-        if (!$this->enabled || !$this->passesSampleRate() || !$this->shouldCaptureRequestEvent($request, $response)) {
+        if (!$this->enabled) {
             return;
         }
 
@@ -207,7 +220,10 @@ final class DebugBundleSdk
             'duration_ms' => isset($redactedResponse['duration_ms']) ? max(0, (int) $redactedResponse['duration_ms']) : 0,
         ];
 
-        $event = $this->baseEvent('request_event', $payload, $redactedContext);
+        $event = $this->applyBeforeSend($this->baseEvent('request_event', $payload, $redactedContext));
+        if ($event === null || !$this->passesSampleRate() || !$this->shouldCaptureRequestEvent($request, $response)) {
+            return;
+        }
 
         $this->enqueueEvent($event);
     }
@@ -240,8 +256,12 @@ final class DebugBundleSdk
             return;
         }
 
-        $value = is_callable($data) ? $data() : $data;
-        if (!is_array($value)) {
+        try {
+            $value = is_callable($data) ? $data() : $data;
+        } catch (\Throwable) {
+            return;
+        }
+        if (!is_array($value) || array_is_list($value)) {
             $value = ['value' => $value];
         }
 
@@ -403,11 +423,12 @@ final class DebugBundleSdk
             return;
         }
 
+        $batch = $this->buffer;
         $response = null;
         try {
             $response = $transport->send([
                 'project_token' => $this->projectToken,
-                'events' => $this->buffer,
+                'events' => $batch,
             ]);
         } catch (\Throwable) {
             $this->consecutiveFailures++;
@@ -415,10 +436,40 @@ final class DebugBundleSdk
         }
 
         if ($response->statusCode >= 200 && $response->statusCode < 300) {
-            $this->buffer = [];
+            $acknowledgement = IngestionAcknowledgementDecision::decide($response->body, count($batch));
+            if ($acknowledgement->kind === 'protocol_failure') {
+                $this->consecutiveFailures++;
+                $retryAfterMs = $response->retryAfterMs ?? 1000;
+                $this->retryAfter = $now + ($retryAfterMs / 1000);
+                return;
+            }
+            if ($acknowledgement->kind === 'legacy') {
+                $this->buffer = array_slice($this->buffer, count($batch));
+                $this->retryAfter = 0.0;
+                $this->lastEventAt = $this->now() * 1000;
+                $this->consecutiveFailures = 0;
+                return;
+            }
+
+            $trailingEvents = array_slice($this->buffer, count($batch));
+            $retryableEvents = [];
+            foreach ($acknowledgement->retryableIndices as $index) {
+                if (isset($batch[$index])) {
+                    $retryableEvents[] = $batch[$index];
+                }
+            }
+            $this->buffer = [...$retryableEvents, ...$trailingEvents];
+            if ($acknowledgement->accepted > 0) {
+                $this->lastEventAt = $this->now() * 1000;
+            }
+            if ($retryableEvents !== []) {
+                $this->consecutiveFailures++;
+                $retryAfterMs = $response->retryAfterMs ?? 1000;
+                $this->retryAfter = $now + ($retryAfterMs / 1000);
+                return;
+            }
             $this->retryAfter = 0.0;
-            $this->lastEventAt = $this->now() * 1000;
-            $this->consecutiveFailures = 0;
+            $this->consecutiveFailures = $acknowledgement->accepted > 0 ? 0 : 3;
             return;
         }
 
@@ -503,6 +554,7 @@ final class DebugBundleSdk
         $this->lastEventAt = null;
         $this->consecutiveFailures = 0;
         $this->configFetcher = null;
+        $this->beforeSend = null;
         $this->configuredProbesPollIntervalMs = RemoteConfig::DEFAULT_PROBES_POLL_INTERVAL_MS;
         $this->remoteConfigEtag = null;
         $this->remoteConfigSnapshot = null;
@@ -524,6 +576,7 @@ final class DebugBundleSdk
                     (int) ($lastError['line'] ?? 0),
                 ),
                 null,
+                false,
                 false
             );
         }
@@ -532,9 +585,14 @@ final class DebugBundleSdk
     }
 
     /** @param array<string, mixed>|null $context */
-    private function captureExceptionInternal(\Throwable $error, ?array $context, bool $handled): void
+    private function captureExceptionInternal(
+        \Throwable $error,
+        ?array $context,
+        bool $handled,
+        bool $runBeforeSend = true
+    ): void
     {
-        if (!$this->enabled || !$this->passesSampleRate()) {
+        if (!$this->enabled) {
             return;
         }
 
@@ -563,7 +621,21 @@ final class DebugBundleSdk
         }
 
         $event = $this->baseEvent('backend_exception', $payload, $redactedContext);
-        $suppressionKey = sprintf('backend_exception:%s:%s:%s', $payload['name'], $payload['message'], $payload['stack']);
+        if ($runBeforeSend) {
+            $event = $this->applyBeforeSend($event);
+        }
+        if ($event === null || !$this->passesSampleRate()) {
+            return;
+        }
+
+        $eventPayload = is_array($event['payload'] ?? null) ? $event['payload'] : [];
+        $suppressionKey = sprintf(
+            '%s:%s:%s:%s',
+            (string) ($event['event_type'] ?? 'backend_exception'),
+            (string) ($eventPayload['name'] ?? ''),
+            (string) ($eventPayload['message'] ?? ''),
+            (string) ($eventPayload['stack'] ?? '')
+        );
         if (!$this->suppression->shouldCapture($suppressionKey, $this->now())) {
             return;
         }
@@ -583,325 +655,22 @@ final class DebugBundleSdk
     private function appendSuppressionAggregates(): void
     {
         foreach ($this->suppression->drainAggregates($this->now()) as $aggregate) {
-            $this->buffer[] = $this->baseEvent((string) $aggregate['event_type'], (array) $aggregate['payload']);
-        }
-    }
-
-    /**
-     * @param array<string, mixed> $payload
-     * @param array<string, mixed> $context
-     * @return array<string, mixed>
-     */
-    private function baseEvent(string $eventType, array $payload, array $context = []): array
-    {
-        $mergedContext = array_merge($this->context, $this->redactArray($context));
-        $event = [
-            'schema_version' => self::SCHEMA_VERSION,
-            'event_id' => $this->uuidV4(),
-            'event_type' => $eventType,
-            'occurred_at' => $this->isoNow(),
-            'sdk_name' => self::SDK_NAME,
-            'sdk_version' => self::SDK_VERSION,
-            'service' => [
-                'name' => $this->service,
-                'runtime' => 'php',
-                'framework' => null,
-                'environment' => $this->environment,
-            ],
-            'correlation' => $this->buildCorrelation($mergedContext),
-            'payload' => $payload,
-        ];
-
-        $eventContext = $this->eventContext($mergedContext);
-        if ($eventContext !== []) {
-            $event['context'] = $eventContext;
-        }
-
-        return $event;
-    }
-
-    /**
-     * @param array<string, mixed> $context
-     * @return array<string, mixed>
-     */
-    private function eventContext(array $context): array
-    {
-        unset(
-            $context['request'],
-            $context['response'],
-            $context['correlation'],
-            $context['request_id'],
-            $context['trace_id'],
-            $context['session_id'],
-            $context['user_id_hash']
-        );
-
-        return $context;
-    }
-
-    /** @return array<string, mixed> */
-    private function buildRequestPayload(mixed $request): array
-    {
-        if (!is_array($request)) {
-            return [
-                'method' => 'UNKNOWN',
-                'path' => '/',
-                'headers' => [],
-                'query' => [],
-            ];
-        }
-
-        return [
-            'method' => (string) ($request['method'] ?? 'GET'),
-            'path' => (string) ($request['path'] ?? '/'),
-            'headers' => $this->normalizeMap(is_array($request['headers'] ?? null) ? $request['headers'] : []),
-            'query' => $this->normalizeMap(is_array($request['query'] ?? null) ? $request['query'] : []),
-            'body' => is_array($request['body'] ?? null) ? $request['body'] : null,
-        ];
-    }
-
-    /** @return array<string, mixed> */
-    private function buildResponsePayload(mixed $response): array
-    {
-        if (!is_array($response)) {
-            return [
-                'status_code' => 0,
-            ];
-        }
-
-        return [
-            'status_code' => isset($response['status_code']) ? (int) $response['status_code'] : 0,
-        ];
-    }
-
-    /** @return array<string, mixed> */
-    private function buildRuntimePayload(): array
-    {
-        $pid = getmypid();
-        $cwd = getcwd();
-        $hostname = gethostname();
-
-        return [
-            'version' => PHP_VERSION,
-            'platform' => PHP_OS_FAMILY,
-            'arch' => php_uname('m') ?: null,
-            'pid' => is_int($pid) ? $pid : null,
-            'cwd' => is_string($cwd) ? $cwd : null,
-            'uptime_sec' => max(0.0, (hrtime(true) - $this->processStartedAtNs) / 1_000_000_000),
-            'hostname' => $hostname !== false ? $hostname : null,
-            'memory' => [
-                'rss' => null,
-                'heap_total' => memory_get_usage(true),
-                'heap_used' => memory_get_usage(false),
-                'external' => null,
-                'peak' => memory_get_peak_usage(true),
-            ],
-        ];
-    }
-
-    /**
-     * @param array<string, mixed> $context
-     * @return array<string, string|null>
-     */
-    private function buildCorrelation(array $context = []): array
-    {
-        return [
-            'request_id' => $this->readContextString('request_id', $context) ?? ($this->requestCorrelation['request_id'] ?? null),
-            'trace_id' => $this->readContextString('trace_id', $context) ?? ($this->requestCorrelation['trace_id'] ?? null),
-            'session_id' => $this->readContextString('session_id', $context),
-            'user_id_hash' => $this->readContextString('user_id_hash', $context),
-        ];
-    }
-
-    /** @return array<string, mixed>|null */
-    private function buildProbeData(): ?array
-    {
-        if ($this->probeBuffers === []) {
-            return null;
-        }
-
-        $items = [];
-        foreach ($this->probeBuffers as $entries) {
-            foreach ($entries as $entry) {
-                $items[] = $entry;
+            $event = $this->applyBeforeSend(
+                $this->baseEvent((string) $aggregate['event_type'], (array) $aggregate['payload'])
+            );
+            if ($event !== null) {
+                $this->buffer[] = $event;
             }
         }
-
-        return [
-            'version' => 1,
-            'items' => $items,
-        ];
     }
 
     /**
-     * @param array<string, mixed> $value
-     * @param list<RemoteProbeDirective> $directives
+     * @param array<string, mixed> $event
+     * @return array<string, mixed>|null
      */
-    private function emitProbeEvents(string $label, array $value, array $directives): void
+    private function applyBeforeSend(array $event): ?array
     {
-        if ($this->capturePolicy->captureProbeEvents !== 'standalone_when_activated') {
-            return;
-        }
-
-        foreach ($directives as $directive) {
-            $this->enqueueEvent($this->baseEvent('probe_event', [
-                'label' => $label,
-                'data' => $value,
-                'activation_id' => $directive->id,
-                'probe_label_pattern' => $directive->labelPattern,
-            ]));
-        }
-    }
-
-    /** @param list<string>|mixed $customFields */
-    /** @return array<string, bool> */
-    private function buildRedactFields(mixed $customFields): array
-    {
-        $fields = [];
-        foreach (Redaction::DEFAULT_REDACT_FIELDS as $field) {
-            $fields[$field] = true;
-        }
-
-        if (is_array($customFields)) {
-            foreach ($customFields as $field) {
-                if (is_string($field) && $field !== '') {
-                    $fields[strtolower($field)] = true;
-                }
-            }
-        }
-
-        return $fields;
-    }
-
-    /**
-     * @param array<string, mixed> $value
-     * @return array<string, mixed>
-     */
-    private function redactArray(array $value): array
-    {
-        /** @var array<string, mixed> $redacted */
-        $redacted = Redaction::redactValue($value, $this->redactFields);
-        return $redacted;
-    }
-
-    /**
-     * @param array<string, mixed> $value
-     * @return array<string, mixed>|object
-     */
-    private function normalizeMap(array $value): array|object
-    {
-        if ($value === []) {
-            return new \stdClass();
-        }
-
-        return $value;
-    }
-
-    private function stringifyThrowable(\Throwable $error): string
-    {
-        return $error->__toString();
-    }
-
-    private function effectiveLogThreshold(): string
-    {
-        return (self::LEVEL_RANKS[$this->capturePolicy->captureLogs] ?? 0) > (self::LEVEL_RANKS[$this->logLevel] ?? 0)
-            ? $this->capturePolicy->captureLogs
-            : $this->logLevel;
-    }
-
-    /**
-     * @param array<string, mixed> $request
-     * @param array<string, mixed>|null $response
-     */
-    private function shouldCaptureRequestEvent(array $request, ?array $response): bool
-    {
-        $statusCode = isset($response['status_code']) && is_numeric($response['status_code']) ? (int) $response['status_code'] : null;
-        $requestPath = is_string($request['path'] ?? null) ? $request['path'] : (is_string($request['url'] ?? null) ? $request['url'] : null);
-        $httpMethod = is_string($request['method'] ?? null) ? $request['method'] : null;
-        if ($this->isImmediateRequestIncidentStatus($statusCode, $requestPath, $httpMethod)) {
-            return true;
-        }
-
-        return match ($this->capturePolicy->captureRequestEvents) {
-            'off' => false,
-            'failures_only' => $statusCode !== null && $statusCode >= 500,
-            'filtered' => false,
-            default => true,
-        };
-    }
-
-    private function isImmediateRequestIncidentStatus(?int $statusCode, ?string $requestPath = null, ?string $httpMethod = null): bool
-    {
-        if ($statusCode === null) {
-            return false;
-        }
-
-        if ($statusCode >= 500) {
-            return true;
-        }
-        if (in_array($statusCode, $this->capturePolicy->immediateClientErrorStatuses, true)) {
-            return true;
-        }
-        if ($this->matchesImmediateClientErrorPathRule($statusCode, $requestPath, $httpMethod)) {
-            return true;
-        }
-
-        return match ($this->capturePolicy->preset) {
-            'investigative' => in_array($statusCode, self::INVESTIGATIVE_IMMEDIATE_REQUEST_STATUSES, true),
-            'balanced' => in_array($statusCode, self::BALANCED_IMMEDIATE_REQUEST_STATUSES, true),
-            default => false,
-        };
-    }
-
-    private function matchesImmediateClientErrorPathRule(int $statusCode, ?string $requestPath, ?string $httpMethod): bool
-    {
-        if ($statusCode < 400 || $statusCode > 499 || $requestPath === null) {
-            return false;
-        }
-
-        $normalizedPath = $this->normalizeRequestPath($requestPath);
-        $normalizedMethod = $httpMethod === null ? null : strtoupper($httpMethod);
-        foreach ($this->capturePolicy->immediateClientErrorPathRules as $rule) {
-            if ($rule->statusCode !== $statusCode) {
-                continue;
-            }
-            if ($rule->methods !== [] && ($normalizedMethod === null || !in_array($normalizedMethod, $rule->methods, true))) {
-                continue;
-            }
-            if (str_ends_with($rule->pathPattern, '*')) {
-                if (str_starts_with($normalizedPath, substr($rule->pathPattern, 0, -1))) {
-                    return true;
-                }
-            } elseif ($normalizedPath === $rule->pathPattern) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private function normalizeRequestPath(string $value): string
-    {
-        $path = parse_url($value, PHP_URL_PATH);
-        if (is_string($path) && $path !== '') {
-            return $path;
-        }
-        $withoutQuery = explode('?', $value, 2)[0];
-        $withoutFragment = explode('#', $withoutQuery, 2)[0];
-        return str_starts_with($withoutFragment, '/') ? $withoutFragment : '/';
-    }
-
-    private function passesSampleRate(): bool
-    {
-        if ($this->sampleRate >= 1.0) {
-            return true;
-        }
-
-        if ($this->sampleRate <= 0.0) {
-            return false;
-        }
-
-        return (mt_rand() / mt_getrandmax()) <= $this->sampleRate;
+        return BeforeSend::apply($event, $this->beforeSend);
     }
 
     private function levelEnabled(string $candidate, string $threshold): bool

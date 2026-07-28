@@ -37,4 +37,8 @@ file_put_contents(
 
 header('Content-Type: application/json');
 http_response_code(202);
-echo '{"accepted":true}';
+echo json_encode([
+    'accepted' => count($body['events'] ?? []),
+    'rejected' => 0,
+    'errors' => [],
+], JSON_THROW_ON_ERROR);

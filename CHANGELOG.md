@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-28
+
+### Added
+
+- Added the universal `BeforeSend` event hook and canonical object wrapping for scalar/list probe values.
+
+### Fixed
+
+- Reconcile connected ingestion acknowledgements per event, retaining only retryable rejections and withholding delivery health when no event was accepted.
+
 ## [1.2.0] - 2026-07-17
 
 ### Added
