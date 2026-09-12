@@ -16,7 +16,7 @@ final class DebugBundleSdk
     use DebugBundleSdkPolicySupport;
 
     private const SDK_NAME = 'debugbundle/sdk-php';
-    private const SDK_VERSION = '1.3.0';
+    private const SDK_VERSION = '1.4.0';
     private const SCHEMA_VERSION = '2026-03-01';
     private const DEFAULT_ENDPOINT = 'https://api.debugbundle.com/v1/events';
     private const DEFAULT_BATCH_SIZE = 25;

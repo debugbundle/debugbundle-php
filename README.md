@@ -4,7 +4,7 @@ PHP SDK for DebugBundle.
 
 ![Packagist](https://img.shields.io/packagist/v/debugbundle/sdk-php?label=packagist)
 ![CI](https://img.shields.io/github/actions/workflow/status/debugbundle/debugbundle-php/ci.yml?branch=main&label=ci)
-![License](https://img.shields.io/badge/license-AGPL--3.0--only-blue)
+![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 
 Use this package to capture PHP backend exceptions, request metadata, Monolog records, runtime context, and probe data. It supports vanilla PHP plus Laravel, Symfony, Monolog, and browser relay adapters.
 
@@ -302,7 +302,7 @@ That command builds a Composer archive, installs the package into a fresh consum
 For published-package verification during release validation, run the same smoke path against Packagist:
 
 ```bash
-php smoke/run_app_driven_smoke.php --package debugbundle/sdk-php:1.3.0
+php smoke/run_app_driven_smoke.php --package debugbundle/sdk-php:1.4.0
 ```
 
 For a manual verification snippet inside your own app:
@@ -343,4 +343,4 @@ CI validates Composer metadata, PHPUnit, PHPStan, the app-driven smoke path, eve
 
 ## License
 
-AGPL-3.0-only. See `LICENSE`.
+Apache-2.0. See `LICENSE`.
