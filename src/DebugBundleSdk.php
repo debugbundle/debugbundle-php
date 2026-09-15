@@ -16,7 +16,7 @@ final class DebugBundleSdk
     use DebugBundleSdkPolicySupport;
 
     private const SDK_NAME = 'debugbundle/sdk-php';
-    private const SDK_VERSION = '1.4.0';
+    private const SDK_VERSION = '1.4.1';
     private const SCHEMA_VERSION = '2026-03-01';
     private const DEFAULT_ENDPOINT = 'https://api.debugbundle.com/v1/events';
     private const DEFAULT_BATCH_SIZE = 25;
@@ -493,6 +493,10 @@ final class DebugBundleSdk
         }
 
         set_error_handler(function (int $severity, string $message, string $file = '', int $line = 0): bool {
+            // PHP invokes custom handlers even for @-suppressed or masked errors.
+            if ((error_reporting() & $severity) === 0) {
+                return false;
+            }
             $this->captureExceptionInternal(new \ErrorException($message, 0, $severity, $file, $line), null, false);
             return false;
         });

@@ -10,6 +10,10 @@ Use this package to capture PHP backend exceptions, request metadata, Monolog re
 
 Requires PHP 8.2 or newer.
 
+## Automatic capture and application filtering
+
+`captureErrors()` checks the current `error_reporting()` mask for each error. Warnings, notices and deprecations suppressed with `@` or excluded by that mask are ignored. Enabled errors still follow the existing PHP handler behavior. Explicit `captureException()` calls and fatal shutdown capture remain available independently of the warning mask.
+
 ## Installation
 
 ```bash
@@ -302,7 +306,7 @@ That command builds a Composer archive, installs the package into a fresh consum
 For published-package verification during release validation, run the same smoke path against Packagist:
 
 ```bash
-php smoke/run_app_driven_smoke.php --package debugbundle/sdk-php:1.4.0
+php smoke/run_app_driven_smoke.php --package debugbundle/sdk-php:1.4.1
 ```
 
 For a manual verification snippet inside your own app:

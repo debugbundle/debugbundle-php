@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.4.1] - 2026-09-15
+
+### Fixed
+
+- Respect PHP `error_reporting()` for automatic error capture, including `@` suppression and runtime mask changes. Preserve enabled warnings, explicit capture and fatal shutdown handling.
+
 ## [1.4.0] - 2026-09-12
 
 ### Changed
