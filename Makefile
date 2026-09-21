@@ -15,10 +15,13 @@ test-docker:
 check-docker:
 	$(DOCKER_RUN) sh -c 'composer validate --strict && composer test && composer typecheck'
 
-.PHONY: smoke
+.PHONY: smoke smoke-artifact
 
 smoke:
 	rm -rf "$(SMOKE_DIST_DIR)"
 	mkdir -p "$(SMOKE_DIST_DIR)"
 	git archive --format=zip --output "$(SMOKE_ARTIFACT)" HEAD
+	$(MAKE) smoke-artifact
+
+smoke-artifact:
 	$(PHP) smoke/run_app_driven_smoke.php --artifact "$(SMOKE_ARTIFACT)" --version "$(PACKAGE_VERSION)"

@@ -12,7 +12,13 @@ const RELAY_REQUEST_ID = 'req-smoke-relay';
 const BROWSER_SERVICE = 'checkout-web';
 const BROWSER_ENVIRONMENT = 'production';
 
-main($argv);
+// The SDK installs application error handlers. Test failures must still fail CI.
+try {
+    main($argv);
+} catch (Throwable $error) {
+    fwrite(STDERR, 'PHP installed consumer failed: ' . $error->getMessage() . PHP_EOL);
+    exit(1);
+}
 
 function main(array $argv): void
 {
@@ -275,7 +281,7 @@ function runServerEventSmoke(string $endpoint, string $expectedVersion): void
     ];
 
     $sdk->beginRequest($request);
-    $sdk->captureMessage('php app-driven smoke message', 'error', ['feature' => 'app-driven-smoke']);
+    $sdk->captureMessage('php app-driven smoke message', 'error', ['feature' => 'app-driven-smoke', 'note' => 'password=PACKED_SMOKE_SECRET']);
     $sdk->captureRequest(
         $request,
         [
@@ -283,7 +289,7 @@ function runServerEventSmoke(string $endpoint, string $expectedVersion): void
             'duration_ms' => 17,
             'headers' => ['content-type' => 'application/json'],
         ],
-        ['feature' => 'app-driven-smoke']
+        ['feature' => 'app-driven-smoke', 'note' => 'password=PACKED_SMOKE_SECRET']
     );
     $sdk->flush();
     $sdk->endRequest();
@@ -388,6 +394,9 @@ function validateCapturedRequests(array $requests, string $schemaPath, string $e
     $serverRequest = null;
     $relayRequest = null;
     foreach ($requests as $request) {
+        if (str_contains(json_encode($request['body'], JSON_THROW_ON_ERROR), 'PACKED_SMOKE_SECRET')) {
+            throw new RuntimeException('Installed SDK leaked the privacy canary.');
+        }
         $events = $request['body']['events'] ?? null;
         if (!is_array($events) || $events === []) {
             continue;
@@ -470,8 +479,9 @@ function validateCapturedRequests(array $requests, string $schemaPath, string $e
     if (($relayEvent['correlation']['trace_id'] ?? null) !== RELAY_TRACE_ID || ($relayEvent['correlation']['request_id'] ?? null) !== RELAY_REQUEST_ID) {
         throw new RuntimeException('Expected the relay smoke event to preserve browser-owned correlation fields.');
     }
-    if (array_key_exists('project_token', $relayEvent) || array_key_exists('project_id', $relayEvent)) {
-        throw new RuntimeException('Expected relay forwarding to strip browser-supplied trust fields before transport.');
+    // The relay contract attaches its own server credential after stripping browser trust fields.
+    if (($relayEvent['project_token'] ?? null) !== PROJECT_TOKEN || array_key_exists('project_id', $relayEvent)) {
+        throw new RuntimeException('Expected relay forwarding to replace browser trust fields with server-owned credentials.');
     }
 }
 
@@ -536,7 +546,8 @@ function runCommand(array $command, ?string $cwd = null): void
         [
             0 => ['pipe', 'r'],
             1 => ['pipe', 'w'],
-            2 => ['pipe', 'w'],
+            // Drain one pipe: Composer can otherwise fill stderr while we wait on stdout.
+            2 => ['redirect', 1],
         ],
         $pipes,
         $cwd,
@@ -549,9 +560,7 @@ function runCommand(array $command, ?string $cwd = null): void
 
     fclose($pipes[0]);
     $stdout = stream_get_contents($pipes[1]);
-    $stderr = stream_get_contents($pipes[2]);
     fclose($pipes[1]);
-    fclose($pipes[2]);
 
     $exitCode = proc_close($process);
     if ($exitCode === 0) {
@@ -559,11 +568,10 @@ function runCommand(array $command, ?string $cwd = null): void
     }
 
     throw new RuntimeException(sprintf(
-        "Command failed with exit code %d: %s\n%s%s",
+        "Command failed with exit code %d: %s\n%s",
         $exitCode,
         implode(' ', $command),
-        $stdout !== false && $stdout !== '' ? $stdout . "\n" : '',
-        $stderr !== false ? $stderr : ''
+        $stdout !== false && $stdout !== '' ? $stdout . "\n" : ''
     ));
 }
 

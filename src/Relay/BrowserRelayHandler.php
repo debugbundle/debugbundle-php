@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace DebugBundle\Relay;
 
+use DebugBundle\TelemetryPrivacy;
+
 use DebugBundle\Transport\TransportInterface;
 
 final class BrowserRelayHandler
@@ -153,7 +155,8 @@ final class BrowserRelayHandler
 
             $eventType = $candidate['event_type'] ?? null;
             if (!is_string($eventType) || !in_array($eventType, self::ACCEPTED_EVENT_TYPES, true)) {
-                $errors[] = sprintf('batch[%d]: Unsupported browser relay event type %s.', $index, is_string($eventType) ? $eventType : 'unknown');
+                $safeType = $eventType === 'backend_exception' ? $eventType : 'unknown';
+                $errors[] = sprintf('batch[%d]: Unsupported browser relay event type %s.', $index, $safeType);
                 continue;
             }
 
@@ -317,7 +320,26 @@ final class BrowserRelayHandler
             $sanitized['correlation'] = $correlation;
         }
 
-        return $sanitized;
+        try {
+            if (!TelemetryPrivacy::hasSafeEventIdentity($sanitized)) {
+                return null;
+            }
+            $protected = TelemetryPrivacy::protect([
+                'service' => $sanitized['service'],
+                'payload' => $sanitized['payload'],
+            ]);
+            if (!is_array($protected) || !is_array($protected['service'] ?? null)
+                || !is_array($protected['payload'] ?? null)
+                || !is_string($protected['service']['name'] ?? null)
+                || !is_string($protected['service']['environment'] ?? null)) {
+                return null;
+            }
+            $sanitized['service'] = $protected['service'];
+            $sanitized['payload'] = $protected['payload'];
+            return $sanitized;
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     /**

@@ -16,7 +16,7 @@ final class DebugBundleSdk
     use DebugBundleSdkPolicySupport;
 
     private const SDK_NAME = 'debugbundle/sdk-php';
-    private const SDK_VERSION = '1.4.1';
+    private const SDK_VERSION = '1.5.0';
     private const SCHEMA_VERSION = '2026-03-01';
     private const DEFAULT_ENDPOINT = 'https://api.debugbundle.com/v1/events';
     private const DEFAULT_BATCH_SIZE = 25;
@@ -236,7 +236,14 @@ final class DebugBundleSdk
 
     public function setContext(string $key, mixed $value): void
     {
-        $this->context[$key] = Redaction::redactValue($value, $this->redactFields);
+        try {
+            $protected = TelemetryPrivacy::protect([$key => $value], $this->redactFields);
+            if (is_array($protected) && array_key_exists($key, $protected)) {
+                $this->context[$key] = $protected[$key];
+            }
+        } catch (\Throwable) {
+            // SDK-owned context must not retain unsupported or over-budget input.
+        }
     }
 
     /** @param array<string, mixed>|null $opts */
@@ -265,7 +272,15 @@ final class DebugBundleSdk
             $value = ['value' => $value];
         }
 
-        $redactedValue = $this->redactArray($value);
+        try {
+            $redactedValue = TelemetryPrivacy::protect($value, $this->redactFields);
+            $label = TelemetryPrivacy::protect($label, $this->redactFields);
+            if (!is_array($redactedValue) || !is_string($label)) {
+                return;
+            }
+        } catch (\Throwable) {
+            return;
+        }
 
         if ($isHeavy) {
             $this->emitProbeEvents($label, $redactedValue, $matchingDirectives);
@@ -650,6 +665,10 @@ final class DebugBundleSdk
     /** @param array<string, mixed> $event */
     private function enqueueEvent(array $event): void
     {
+        $event = $this->protectEvent($event);
+        if ($event === null) {
+            return;
+        }
         $this->buffer[] = $event;
         if (count($this->buffer) >= $this->batchSize) {
             $this->flush();
@@ -663,7 +682,10 @@ final class DebugBundleSdk
                 $this->baseEvent((string) $aggregate['event_type'], (array) $aggregate['payload'])
             );
             if ($event !== null) {
-                $this->buffer[] = $event;
+                $protected = $this->protectEvent($event);
+                if ($protected !== null) {
+                    $this->buffer[] = $protected;
+                }
             }
         }
     }
@@ -674,7 +696,46 @@ final class DebugBundleSdk
      */
     private function applyBeforeSend(array $event): ?array
     {
-        return BeforeSend::apply($event, $this->beforeSend);
+        $protected = $this->protectEvent($event);
+        if ($protected === null) {
+            return null;
+        }
+        $prepared = BeforeSend::apply($protected, $this->beforeSend);
+        return $prepared === null ? null : $this->protectEvent($prepared);
+    }
+
+    /** @param array<string, mixed> $event
+     *  @return array<string, mixed>|null
+     */
+    private function protectEvent(array $event): ?array
+    {
+        try {
+            if (!TelemetryPrivacy::hasSafeEventIdentity($event, $this->redactFields)) {
+                return null;
+            }
+            $fields = TelemetryPrivacy::protect([
+                'payload' => $event['payload'] ?? null,
+                'context' => $event['context'] ?? null,
+                'service' => $event['service'] ?? null,
+            ], $this->redactFields);
+            if (!is_array($fields) || !is_array($fields['payload'] ?? null)
+                || !is_array($fields['service'] ?? null)
+                || !is_string($fields['service']['name'] ?? null)
+                || !is_string($fields['service']['environment'] ?? null)) {
+                return null;
+            }
+            $event['payload'] = $fields['payload'];
+            $event['service'] = $fields['service'];
+            if (isset($event['context'])) {
+                if (!is_array($fields['context'])) {
+                    return null;
+                }
+                $event['context'] = $fields['context'];
+            }
+            return $event;
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     private function attachLoggerIntegration(mixed $logger): void

@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+## [1.5.0] - 2026-09-21
+
+### Security
+
+- Enforce native bounded telemetry protection before context and probe storage, after `beforeSend`, at final buffering and transport, and in the browser relay. Custom keys add to the mandatory baseline.
+
 ## [1.4.1] - 2026-09-15
 
 ### Fixed
@@ -11,8 +19,6 @@
 ### Changed
 
 - License first-party SDK code under Apache-2.0 and ship consistent package licensing metadata and license text.
-
-## [Unreleased]
 
 ## [1.3.0] - 2026-07-28
 

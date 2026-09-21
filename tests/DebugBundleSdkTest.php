@@ -15,6 +15,36 @@ final class DebugBundleSdkTest extends TestCase
 {
     private ?DebugBundleSdk $sdk = null;
 
+    public function testHookAndContextCannotPutCredentialsIntoTransport(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = new DebugBundleSdk($transport);
+        $this->sdk = $sdk;
+        $seenByHook = null;
+        $sdk->init([
+            'projectToken' => 'dbundle_proj_test',
+            'service' => 'checkout-api',
+            'environment' => 'production',
+            'beforeSend' => static function (array $event) use (&$seenByHook): array {
+                $seenByHook = $event;
+                $event['payload']['message'] = 'token=SYNTHETIC_HOOK_SECRET';
+                return $event;
+            },
+        ]);
+        $sdk->setContext('user_password', 'SYNTHETIC_CONTEXT_SECRET');
+        $sdk->captureMessage('Authorization: Bearer SYNTHETIC_CAPTURE_SECRET', 'error', ['safe' => 'ok']);
+        $sdk->flush();
+
+        self::assertNotNull($seenByHook);
+        self::assertStringNotContainsString('SYNTHETIC_', json_encode($seenByHook, JSON_THROW_ON_ERROR));
+        self::assertCount(1, $transport->calls);
+        $event = $transport->calls[0]['events'][0];
+        self::assertSame('[REDACTED]', $event['context']['user_password']);
+        self::assertSame('token=[REDACTED]', $event['payload']['message']);
+        self::assertStringNotContainsString('SYNTHETIC_', json_encode($event, JSON_THROW_ON_ERROR));
+        self::assertSame('dbundle_proj_test', $transport->calls[0]['project_token']);
+    }
+
     protected function tearDown(): void
     {
         $this->sdk?->reset();

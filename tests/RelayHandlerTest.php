@@ -15,6 +15,40 @@ final class RelayHandlerTest extends TestCase
     /** @var array{version:int,cases:list<array<string,mixed>>}|null */
     private static ?array $relayComplianceFixtures = null;
 
+    public function testRelayScrubsLegacyBrowserPayloadBeforeDelivery(): void
+    {
+        $accepted = null;
+        $handler = new BrowserRelayHandler([
+            'onAccept' => static function (BrowserRelayAcceptedBatch $batch) use (&$accepted): void {
+                $accepted = $batch;
+            },
+        ]);
+        $response = $handler->handle($this->createRequest([
+            'batch' => [[
+                'schema_version' => '2026-03-01',
+                'event_id' => '00000000-0000-4000-8000-000000000304',
+                'event_type' => 'frontend_exception',
+                'occurred_at' => '2026-03-31T10:00:00Z',
+                'sdk_version' => '1.2.3',
+                'service' => ['name' => 'checkout-web', 'environment' => 'production'],
+                'payload' => [
+                    'name' => 'TypeError',
+                    'message' => 'password=SYNTHETIC_RELAY_SECRET',
+                    'data' => ['apiKey' => 'SYNTHETIC_NESTED_SECRET'],
+                ],
+            ]],
+        ], [
+            'content-type' => 'application/json',
+            'host' => 'app.example.com',
+            'origin' => 'https://app.example.com',
+        ]));
+
+        self::assertSame(202, $response->status);
+        self::assertInstanceOf(BrowserRelayAcceptedBatch::class, $accepted);
+        self::assertSame('password=[REDACTED]', $accepted->events[0]['payload']['message']);
+        self::assertSame('[REDACTED]', $accepted->events[0]['payload']['data']['apiKey']);
+    }
+
     public function testAcceptsAnalyticsEventsAndPreservesAnalyticsCorrelation(): void
     {
         $fixture = self::relayComplianceFixture('valid-analytics-event');
