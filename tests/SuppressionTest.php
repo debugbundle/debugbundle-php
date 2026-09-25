@@ -9,6 +9,18 @@ use PHPUnit\Framework\TestCase;
 
 final class SuppressionTest extends TestCase
 {
+    public function testDistinctFingerprintStateIsBoundedWithoutDroppingNewErrors(): void
+    {
+        $suppression = new Suppression();
+        for ($index = 0; $index < 2_100; $index++) {
+            self::assertTrue($suppression->shouldCapture("error-{$index}", (float) $index));
+        }
+
+        $states = (new \ReflectionProperty(Suppression::class, 'states'))->getValue($suppression);
+        self::assertIsArray($states);
+        self::assertLessThanOrEqual(2_048, count($states));
+    }
+
     public function testAggregatesDuplicatesAfterInitialBudgetIsExhausted(): void
     {
         $suppression = new Suppression();

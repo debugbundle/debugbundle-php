@@ -14,9 +14,10 @@ final class DebugBundleSdk
 {
     use DebugBundleSdkEventSupport;
     use DebugBundleSdkPolicySupport;
+    use DebugBundleSdkQueueSupport;
 
     private const SDK_NAME = 'debugbundle/sdk-php';
-    private const SDK_VERSION = '1.5.0';
+    private const SDK_VERSION = '2.0.0';
     private const SCHEMA_VERSION = '2026-03-01';
     private const DEFAULT_ENDPOINT = 'https://api.debugbundle.com/v1/events';
     private const DEFAULT_BATCH_SIZE = 25;
@@ -50,6 +51,7 @@ final class DebugBundleSdk
     private bool $errorsHooked = false;
     private bool $exceptionsHooked = false;
     private bool $shutdownHooked = false;
+    private bool $requestEndAttempted = false;
     private bool $probesEnabled = true;
     private int $processStartedAtNs;
 
@@ -120,6 +122,9 @@ final class DebugBundleSdk
         $this->maxProbeEntriesPerLabel = max(1, (int) ($config['maxProbeEntriesPerLabel'] ?? 10));
         $this->redactFields = $this->buildRedactFields($config['redactFields'] ?? null);
         $this->buffer = [];
+        $this->bufferBytes = 0;
+        $this->bufferPriorities = [0, 0, 0, 0];
+        $this->pressureDrops = [];
         $this->context = [];
         $this->probeBuffers = [];
         $this->requestTriggerDirectives = [];
@@ -127,6 +132,7 @@ final class DebugBundleSdk
         $this->retryAfter = 0.0;
         $this->lastEventAt = null;
         $this->consecutiveFailures = 0;
+        $this->requestEndAttempted = false;
         $this->suppression = new Suppression();
         $this->capturedExceptions = new \WeakMap();
         $this->transport = $this->transportOverride;
@@ -140,17 +146,15 @@ final class DebugBundleSdk
         $this->configuredProbesPollIntervalMs = max(1, (int) ($config['probesPollInterval'] ?? RemoteConfig::DEFAULT_PROBES_POLL_INTERVAL_MS));
         $this->remoteConfigEtag = null;
         $this->remoteConfigSnapshot = null;
-        $this->capturePolicy = RemoteConfig::balancedCapturePolicy();
+        $this->capturePolicy = $this->configFetcher === null
+            ? RemoteConfig::balancedCapturePolicy()
+            : RemoteConfig::minimalCapturePolicy();
 
         if ($this->transport === null && $this->enabled) {
             $this->transport = new HttpTransport($this->endpoint);
         }
 
         $this->attachLoggerIntegration($config['logger'] ?? null);
-
-        if ($this->enabled && $this->configFetcher !== null) {
-            $this->refreshRemoteConfig(true);
-        }
 
         $this->captureErrors();
         $this->captureExceptions();
@@ -176,6 +180,14 @@ final class DebugBundleSdk
         if (!$this->enabled) {
             return;
         }
+        if (
+            $this->capturePolicy->captureLogs === 'off'
+            || !$this->levelEnabled($normalizedLevel, $this->effectiveLogThreshold())
+            || !$this->passesSampleRate()
+            || !$this->preAdmissionAllows('log_event', $normalizedLevel)
+        ) {
+            return;
+        }
 
         $payload = [
             'level' => $normalizedLevel,
@@ -186,9 +198,10 @@ final class DebugBundleSdk
         $event = $this->applyBeforeSend($this->baseEvent('log_event', $payload, $context ?? []));
         if (
             $event === null
-            || !$this->passesSampleRate()
-            || $this->capturePolicy->captureLogs === 'off'
-            || !$this->levelEnabled($normalizedLevel, $this->effectiveLogThreshold())
+            || !$this->levelEnabled(
+                $this->normalizeLevel((string) ($event['payload']['level'] ?? 'warning')),
+                $this->effectiveLogThreshold()
+            )
         ) {
             return;
         }
@@ -203,7 +216,9 @@ final class DebugBundleSdk
      */
     public function captureRequest(array $request, ?array $response = null, ?array $context = null): void
     {
-        if (!$this->enabled) {
+        if (!$this->enabled || !$this->shouldCaptureRequestEvent($request, $response) || !$this->passesSampleRate()
+            || !$this->preAdmissionAllows('request_event', 'warning',
+                isset($response['status_code']) && is_numeric($response['status_code']) ? (int) $response['status_code'] : null)) {
             return;
         }
 
@@ -221,7 +236,10 @@ final class DebugBundleSdk
         ];
 
         $event = $this->applyBeforeSend($this->baseEvent('request_event', $payload, $redactedContext));
-        if ($event === null || !$this->passesSampleRate() || !$this->shouldCaptureRequestEvent($request, $response)) {
+        if ($event === null || !$this->shouldCaptureRequestEvent(
+            (array) ($event['payload'] ?? []),
+            ['status_code' => $event['payload']['response_status'] ?? null]
+        )) {
             return;
         }
 
@@ -312,7 +330,7 @@ final class DebugBundleSdk
 
         $request = [
             'method' => 'GET',
-            'headers' => [],
+            'headers' => ['authorization' => 'Bearer ' . $this->projectToken],
         ];
         if ($this->remoteConfigEtag !== null) {
             $request['headers']['if-none-match'] = $this->remoteConfigEtag;
@@ -424,6 +442,7 @@ final class DebugBundleSdk
         }
 
         $this->appendSuppressionAggregates();
+        $this->appendPressureAggregates();
         if ($this->buffer === []) {
             return;
         }
@@ -459,7 +478,7 @@ final class DebugBundleSdk
                 return;
             }
             if ($acknowledgement->kind === 'legacy') {
-                $this->buffer = array_slice($this->buffer, count($batch));
+                $this->replaceBufferedEvents(array_slice($this->buffer, count($batch)));
                 $this->retryAfter = 0.0;
                 $this->lastEventAt = $this->now() * 1000;
                 $this->consecutiveFailures = 0;
@@ -473,7 +492,7 @@ final class DebugBundleSdk
                     $retryableEvents[] = $batch[$index];
                 }
             }
-            $this->buffer = [...$retryableEvents, ...$trailingEvents];
+            $this->replaceBufferedEvents([...$retryableEvents, ...$trailingEvents]);
             if ($acknowledgement->accepted > 0) {
                 $this->lastEventAt = $this->now() * 1000;
             }
@@ -496,7 +515,7 @@ final class DebugBundleSdk
         }
 
         if ($response->statusCode >= 400 && $response->statusCode < 500) {
-            $this->buffer = [];
+            $this->replaceBufferedEvents([]);
             $this->retryAfter = 0.0;
         }
     }
@@ -526,7 +545,6 @@ final class DebugBundleSdk
 
         set_exception_handler(function (\Throwable $error): void {
             $this->captureExceptionInternal($error, null, false);
-            $this->flush();
         });
         $this->exceptionsHooked = true;
     }
@@ -564,6 +582,9 @@ final class DebugBundleSdk
         }
         $this->loggerBindings = [];
         $this->buffer = [];
+        $this->bufferBytes = 0;
+        $this->bufferPriorities = [0, 0, 0, 0];
+        $this->pressureDrops = [];
         $this->context = [];
         $this->probeBuffers = [];
         $this->requestCorrelation = [];
@@ -572,6 +593,7 @@ final class DebugBundleSdk
         $this->retryAfter = 0.0;
         $this->lastEventAt = null;
         $this->consecutiveFailures = 0;
+        $this->requestEndAttempted = false;
         $this->configFetcher = null;
         $this->beforeSend = null;
         $this->configuredProbesPollIntervalMs = RemoteConfig::DEFAULT_PROBES_POLL_INTERVAL_MS;
@@ -600,7 +622,7 @@ final class DebugBundleSdk
             );
         }
 
-        $this->flush();
+        $this->flushAtRequestEnd();
     }
 
     /** @param array<string, mixed>|null $context */
@@ -612,6 +634,9 @@ final class DebugBundleSdk
     ): void
     {
         if (!$this->enabled) {
+            return;
+        }
+        if (!$this->preAdmissionAllows('backend_exception')) {
             return;
         }
 
@@ -669,10 +694,7 @@ final class DebugBundleSdk
         if ($event === null) {
             return;
         }
-        $this->buffer[] = $event;
-        if (count($this->buffer) >= $this->batchSize) {
-            $this->flush();
-        }
+        $this->admitProtectedEvent($event);
     }
 
     private function appendSuppressionAggregates(): void
@@ -684,7 +706,7 @@ final class DebugBundleSdk
             if ($event !== null) {
                 $protected = $this->protectEvent($event);
                 if ($protected !== null) {
-                    $this->buffer[] = $protected;
+                    $this->admitProtectedEvent($protected);
                 }
             }
         }

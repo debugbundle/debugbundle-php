@@ -12,14 +12,35 @@ final class Suppression
     private const LOOP_RESET_AFTER_SECONDS = 60.0;
     private const LOOP_CHECKPOINT_SECONDS = 30.0;
     private const MAX_NORMAL_EVENTS_PER_WINDOW = 3;
+    private const MAX_TRACKED_FINGERPRINTS = 2_048;
 
     /** @var array<string, array<string, float|int|bool|null>> */
     private array $states = [];
 
+    private int $overflowCount = 0;
+    private ?float $overflowFirstSeenAt = null;
+    private ?float $overflowLastSeenAt = null;
+
     public function shouldCapture(string $key, float $now): bool
     {
-        if (!isset($this->states[$key])) {
-            $this->states[$key] = [
+        $fingerprint = hash('sha256', $key);
+        if (isset($this->states[$fingerprint])) {
+            $existing = $this->states[$fingerprint];
+            unset($this->states[$fingerprint]);
+            $this->states[$fingerprint] = $existing;
+        } else {
+            if (count($this->states) >= self::MAX_TRACKED_FINGERPRINTS) {
+                $oldestKey = array_key_first($this->states);
+                $oldest = $this->states[$oldestKey];
+                $pending = (int) $oldest['pending_suppressed_count'];
+                if ($pending > 0) {
+                    $this->overflowFirstSeenAt ??= (float) $oldest['pending_first_seen_at'];
+                    $this->overflowCount += $pending;
+                    $this->overflowLastSeenAt = (float) $oldest['pending_last_seen_at'];
+                }
+                unset($this->states[$oldestKey]);
+            }
+            $this->states[$fingerprint] = [
                 'window_started_at' => $now,
                 'emitted_count' => 0,
                 'pending_suppressed_count' => 0,
@@ -33,10 +54,10 @@ final class Suppression
             ];
         }
 
-        $state = &$this->states[$key];
+        $state = &$this->states[$fingerprint];
 
         if (($state['suppression_mode'] === true) && ($now - (float) $state['last_seen_at']) >= self::LOOP_RESET_AFTER_SECONDS) {
-            $this->states[$key] = [
+            $this->states[$fingerprint] = [
                 'window_started_at' => $now,
                 'emitted_count' => 0,
                 'pending_suppressed_count' => 0,
@@ -48,7 +69,7 @@ final class Suppression
                 'suppression_mode' => false,
                 'last_seen_at' => $now,
             ];
-            $state = &$this->states[$key];
+            $state = &$this->states[$fingerprint];
         }
 
         if (($now - (float) $state['window_started_at']) >= self::DUPLICATE_WINDOW_SECONDS) {
@@ -103,7 +124,7 @@ final class Suppression
             $aggregates[] = [
                 'event_type' => 'error_suppressed',
                 'payload' => [
-                    'fingerprint' => hash('sha256', $key),
+                    'fingerprint' => $key,
                     'suppressed_count' => (int) $state['pending_suppressed_count'],
                     'first_seen' => self::toIso((float) $state['pending_first_seen_at']),
                     'last_seen' => self::toIso((float) $state['pending_last_seen_at']),
@@ -115,6 +136,22 @@ final class Suppression
             $state['pending_first_seen_at'] = null;
             $state['pending_last_seen_at'] = null;
             $state['last_aggregate_emitted_at'] = $now;
+        }
+
+        if ($this->overflowCount > 0 && $this->overflowFirstSeenAt !== null && $this->overflowLastSeenAt !== null) {
+            $aggregates[] = [
+                'event_type' => 'error_suppressed',
+                'payload' => [
+                    'fingerprint' => hash('sha256', 'php:suppression-state-pressure'),
+                    'suppressed_count' => $this->overflowCount,
+                    'first_seen' => self::toIso($this->overflowFirstSeenAt),
+                    'last_seen' => self::toIso($this->overflowLastSeenAt),
+                    'window_seconds' => (int) self::DUPLICATE_WINDOW_SECONDS,
+                ],
+            ];
+            $this->overflowCount = 0;
+            $this->overflowFirstSeenAt = null;
+            $this->overflowLastSeenAt = null;
         }
 
         return $aggregates;

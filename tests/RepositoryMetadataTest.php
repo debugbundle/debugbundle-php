@@ -116,6 +116,9 @@ final class RepositoryMetadataTest extends TestCase
         self::assertStringContainsString('composer install --no-interaction --prefer-dist', $workflow);
         self::assertStringContainsString('composer test', $workflow);
         self::assertStringContainsString('composer typecheck', $workflow);
+        self::assertStringContainsString('coverage: xdebug', $workflow);
+        self::assertStringContainsString('--coverage-clover coverage.xml', $workflow);
+        self::assertStringContainsString('php scripts/check_coverage.php coverage.xml', $workflow);
         self::assertStringContainsString('make smoke', $workflow);
         self::assertStringContainsString('https://packagist.org/api/update-package', $workflow);
         self::assertStringContainsString('php smoke/run_app_driven_smoke.php --package debugbundle/sdk-php:${RELEASE_VERSION}', $workflow);

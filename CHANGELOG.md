@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-25
+
+### Changed
+
+- Capture never sends at batch-full, and `init()` no longer calls a remote `configFetcher`. Applications that use remote policy must call `refreshRemoteConfig()` from a controlled background or administrative context; the fetch request includes the project-token Authorization header. A missing initial policy uses the local baseline until refreshed.
+- Automatic shutdown now calls `flushAtRequestEnd()` once, selecting at most 25 priority-ordered events and 256 KiB. Exceptions outrank routine logs; dropped events are summarized when a reporting slot remains. Built-in transport uses an advisory 250 ms timeout. The best-effort send can still occupy a PHP worker, and unsent events are lost when the request ends. `flush()` remains an explicit synchronous operation.
+- Reject filtered logs before hook or privacy work and keep retry/pressure retention within the 1,000-event, 8 MiB buffer budget. Full all-ERROR queues reject further captures with constant-time priority accounting and one aggregate loss report. Failed requests take priority over ordinary request telemetry when the buffer is full.
+
+Existing 1.x installations retain their prior behavior until upgraded. The 2.0 release gates include an installed PHP-FPM worker-cost smoke and an independently packaged WordPress integration smoke.
+
 ## [1.5.0] - 2026-09-21
 
 ### Security

@@ -28,6 +28,10 @@ if ($captureFile !== null && $captureFile !== '') {
 }
 
 $status = isset($_GET['status']) ? (int) $_GET['status'] : 202;
+$delayMs = isset($_GET['delay_ms']) ? min(3000, max(0, (int) $_GET['delay_ms'])) : 0;
+if ($delayMs > 0) {
+    usleep($delayMs * 1000);
+}
 $retryAfter = isset($_GET['retry_after']) ? (string) $_GET['retry_after'] : null;
 
 if ($retryAfter !== null && $retryAfter !== '') {

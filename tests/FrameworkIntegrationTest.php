@@ -443,6 +443,7 @@ final class FrameworkIntegrationTest extends TestCase
                 ]),
             ]),
         ]);
+        $sdk->refreshRemoteConfig(true);
 
         $middleware = new DebugBundleMiddleware($sdk, [$clock, 'time']);
         $request = LaravelRequest::create(
@@ -508,6 +509,7 @@ final class FrameworkIntegrationTest extends TestCase
                 ]),
             ]),
         ]);
+        $sdk->refreshRemoteConfig(true);
 
         $subscriber = new DebugBundleEventSubscriber($sdk, [$clock, 'time']);
         $kernel = new class() implements HttpKernelInterface {

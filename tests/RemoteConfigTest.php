@@ -44,10 +44,12 @@ final class RemoteConfigTest extends TestCase
             'configFetcher' => $fetcher,
             'probesPollInterval' => 15000,
         ]);
+        $sdk->refreshRemoteConfig(true);
 
         self::assertCount(1, $fetcher->calls);
         self::assertSame('https://api.debugbundle.com/v1/sdk/config', $fetcher->calls[0]['url']);
         self::assertSame('GET', $fetcher->calls[0]['request']['method']);
+        self::assertSame('Bearer dbundle_proj_test', $fetcher->calls[0]['request']['headers']['authorization']);
     }
 
     public function testRemoteConfigUsesConfiguredEndpointBaseForSelfHostedConfigRefresh(): void
@@ -71,6 +73,7 @@ final class RemoteConfigTest extends TestCase
             'configFetcher' => $fetcher,
             'probesPollInterval' => 15000,
         ]);
+        $sdk->refreshRemoteConfig(true);
 
         self::assertCount(1, $fetcher->calls);
         self::assertSame('http://self-hosted.test:3001/api/v1/sdk/config', $fetcher->calls[0]['url']);
@@ -116,6 +119,7 @@ final class RemoteConfigTest extends TestCase
             'configFetcher' => $fetcher,
             'probesPollInterval' => 60000,
         ]);
+        $sdk->refreshRemoteConfig(true);
 
         $invocations = 0;
         $heavyProbe = static function () use (&$invocations): array {
@@ -159,6 +163,7 @@ final class RemoteConfigTest extends TestCase
             'configFetcher' => $fetcher,
             'probesPollInterval' => 25000,
         ]);
+        $sdk->refreshRemoteConfig(true);
 
         $sdk->captureMessage('warning blocked', 'warning');
         $sdk->captureMessage('error still allowed', 'error');
@@ -200,6 +205,7 @@ final class RemoteConfigTest extends TestCase
             'environment' => 'production',
             'configFetcher' => $fetcher,
         ]);
+        $sdk->refreshRemoteConfig(true);
 
         $sdk->captureMessage('warning blocked', 'warning');
         $sdk->captureMessage('error kept', 'error');
@@ -240,6 +246,7 @@ final class RemoteConfigTest extends TestCase
             'environment' => 'production',
             'configFetcher' => $fetcher,
         ]);
+        $sdk->refreshRemoteConfig(true);
 
         $sdk->captureRequest(['method' => 'POST', 'path' => '/checkout', 'headers' => []], ['status_code' => 429]);
         $sdk->captureRequest(['method' => 'POST', 'path' => '/checkout', 'headers' => []], ['status_code' => 404]);
@@ -284,6 +291,7 @@ final class RemoteConfigTest extends TestCase
             'environment' => 'production',
             'configFetcher' => $fetcher,
         ]);
+        $sdk->refreshRemoteConfig(true);
 
         $sdk->captureRequest(['method' => 'POST', 'path' => '/checkout/cart', 'headers' => []], ['status_code' => 404]);
         $sdk->captureRequest(['method' => 'GET', 'path' => '/checkout/cart', 'headers' => []], ['status_code' => 404]);
@@ -327,6 +335,7 @@ final class RemoteConfigTest extends TestCase
             'environment' => 'production',
             'configFetcher' => $fetcher,
         ]);
+        $sdk->refreshRemoteConfig(true);
 
         $sdk->captureRequest(['method' => 'POST', 'path' => '/checkout', 'headers' => []], ['status_code' => 409]);
         $sdk->captureRequest(['method' => 'POST', 'path' => '/checkout', 'headers' => []], ['status_code' => 404]);
@@ -368,6 +377,7 @@ final class RemoteConfigTest extends TestCase
             'environment' => 'production',
             'configFetcher' => $fetcher,
         ]);
+        $sdk->refreshRemoteConfig(true);
 
         $sdk->captureRequest(['method' => 'POST', 'path' => '/checkout', 'headers' => []], ['status_code' => 403]);
         $sdk->captureRequest(['method' => 'POST', 'path' => '/checkout', 'headers' => []], ['status_code' => 404]);

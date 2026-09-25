@@ -8,12 +8,153 @@ use DebugBundle\DebugBundle;
 use DebugBundle\DebugBundleSdk;
 use DebugBundle\Transport\TransportResponse;
 use DebugBundle\Tests\Support\FakeTransport;
+use DebugBundle\Tests\Support\FakeConfigFetcher;
+use DebugBundle\Tests\Support\FakeConfigResponse;
 use DebugBundle\Tests\Support\ManualClock;
 use PHPUnit\Framework\TestCase;
 
 final class DebugBundleSdkTest extends TestCase
 {
     private ?DebugBundleSdk $sdk = null;
+
+    public function testFilteredBurstReturnsBeforeHookAndTransport(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = new DebugBundleSdk($transport);
+        $this->sdk = $sdk;
+        $hooks = 0;
+        $sdk->init([
+            'projectToken' => 'dbundle_proj_test',
+            'batchSize' => 1,
+            'logLevel' => 'warning',
+            'beforeSend' => static function (array $event) use (&$hooks): array {
+                $hooks++;
+                return $event;
+            },
+        ]);
+
+        for ($index = 0; $index < 10_000; $index++) {
+            $sdk->captureLog('filtered INFO', 'info', ['index' => $index]);
+        }
+        $sdk->captureRequest(['method' => 'GET', 'path' => '/ok'], ['status_code' => 200]);
+
+        self::assertSame(0, $hooks);
+        self::assertSame([], $transport->calls);
+    }
+
+    public function testInitDoesNotCallRemoteConfigFetcher(): void
+    {
+        $fetches = 0;
+        $transport = new FakeTransport();
+        $sdk = new DebugBundleSdk($transport);
+        $this->sdk = $sdk;
+        $sdk->init([
+            'projectToken' => 'dbundle_proj_test',
+            'configFetcher' => static function () use (&$fetches): never {
+                $fetches++;
+                throw new \RuntimeException('network callback invoked');
+            },
+        ]);
+
+        self::assertSame(0, $fetches);
+        $sdk->captureMessage('warning before policy', 'warning');
+        $sdk->captureMessage('error before policy', 'error');
+        $sdk->flush();
+        self::assertCount(1, $transport->calls);
+        self::assertSame('error before policy', $transport->calls[0]['events'][0]['payload']['message']);
+    }
+
+    public function testRetryPressureKeepsExceptionAndBoundsPendingEvents(): void
+    {
+        $transport = new FakeTransport([new TransportResponse(429, 300_000)]);
+        $sdk = new DebugBundleSdk($transport);
+        $this->sdk = $sdk;
+        $sdk->init(['projectToken' => 'dbundle_proj_test', 'batchSize' => 1]);
+        $sdk->captureException(new \RuntimeException('retain this failure'));
+        for ($index = 0; $index < 1_100; $index++) {
+            $sdk->captureLog("warning {$index}", 'warning');
+        }
+
+        $buffer = (new \ReflectionProperty(DebugBundleSdk::class, 'buffer'))->getValue($sdk);
+        self::assertIsArray($buffer);
+        self::assertLessThanOrEqual(1_000, count($buffer));
+        self::assertContains('backend_exception', array_column($buffer, 'event_type'));
+    }
+
+    public function testFailedRequestDisplacesOrdinaryRequestsAtCapacity(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = new DebugBundleSdk($transport);
+        $this->sdk = $sdk;
+        $sdk->init([
+            'projectToken' => 'dbundle_proj_test',
+            'batchSize' => 2_000,
+            'configFetcher' => new FakeConfigFetcher([
+                new FakeConfigResponse(200, [
+                    'probes_enabled' => true,
+                    'remote_probes_enabled' => false,
+                    'active_probes' => [],
+                    'poll_interval_ms' => 15_000,
+                    'capture_policy' => [
+                        'preset' => 'balanced',
+                        'capture_logs' => 'warning',
+                        'capture_request_events' => 'all',
+                        'capture_breadcrumbs' => 'local_only',
+                        'capture_probe_events' => 'buffer_only',
+                    ],
+                ]),
+            ]),
+        ]);
+        $sdk->refreshRemoteConfig(true);
+
+        for ($index = 0; $index < 1_000; $index++) {
+            $sdk->captureRequest(['method' => 'GET', 'path' => "/ordinary/{$index}"], ['status_code' => 200]);
+        }
+        $sdk->captureRequest(['method' => 'GET', 'path' => '/failed'], ['status_code' => 503]);
+
+        $buffer = (new \ReflectionProperty(DebugBundleSdk::class, 'buffer'))->getValue($sdk);
+        self::assertIsArray($buffer);
+        self::assertCount(1_000, $buffer);
+        self::assertContains(503, array_column(array_column($buffer, 'payload'), 'response_status'));
+        self::assertSame([], $transport->calls);
+    }
+
+    public function testAllErrorBurstDropsBeforeHookAndReportsOneAggregate(): void
+    {
+        $transport = new FakeTransport();
+        $hooks = 0;
+        $sdk = new DebugBundleSdk($transport);
+        $this->sdk = $sdk;
+        $sdk->init([
+            'projectToken' => 'dbundle_proj_test',
+            'batchSize' => 2_000,
+            'beforeSend' => static function (array $event) use (&$hooks): array {
+                $hooks++;
+                return $event;
+            },
+        ]);
+        for ($index = 0; $index < 1_000; $index++) {
+            $sdk->captureLog("accepted error {$index}", 'error');
+        }
+        $hooks = 0;
+        $largeContext = ['large' => str_repeat('x', 1_024)];
+        $started = microtime(true);
+        for ($index = 0; $index < 10_000; $index++) {
+            $sdk->captureLog("discarded error {$index}", 'error', $largeContext);
+        }
+        self::assertLessThan(2.0, microtime(true) - $started);
+        self::assertSame(0, $hooks);
+
+        $sdk->flush();
+        $sdk->flush();
+        $reports = array_values(array_filter(
+            array_merge(...array_column($transport->calls, 'events')),
+            static fn (array $event): bool => $event['event_type'] === 'error_suppressed'
+                && ($event['payload']['reason'] ?? null) === 'queue_pressure',
+        ));
+        self::assertCount(1, $reports);
+        self::assertSame(10_000, $reports[0]['payload']['suppressed_count']);
+    }
 
     public function testHookAndContextCannotPutCredentialsIntoTransport(): void
     {
@@ -193,7 +334,7 @@ final class DebugBundleSdkTest extends TestCase
         self::assertCount(2, $transport->calls);
     }
 
-    public function testFlushesWhenBatchSizeIsReached(): void
+    public function testBatchSizeDoesNotSendFromCaptureAndRequestEndSendsOnce(): void
     {
         $transport = new FakeTransport();
         $sdk = new DebugBundleSdk($transport);
@@ -208,8 +349,57 @@ final class DebugBundleSdkTest extends TestCase
         $sdk->captureMessage('first', 'warning');
         $sdk->captureMessage('second', 'warning');
 
+        self::assertSame(0, count($transport->calls));
+        $sdk->flushAtRequestEnd();
         self::assertCount(1, $transport->calls);
-        self::assertCount(2, $transport->calls[0]['events']);
+        $call = $transport->calls[0] ?? null;
+        self::assertIsArray($call);
+        self::assertCount(2, $call['events']);
+        $sdk->flushAtRequestEnd();
+        self::assertCount(1, $transport->calls);
+    }
+
+    public function testRequestEndPrioritizesExceptionWithinOneBoundedBatch(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = new DebugBundleSdk($transport);
+        $this->sdk = $sdk;
+        $sdk->init(['projectToken' => 'dbundle_proj_test', 'batchSize' => 2]);
+
+        for ($index = 0; $index < 30; $index++) {
+            $sdk->captureMessage("warning {$index}", 'warning');
+        }
+        $sdk->captureException(new \RuntimeException('priority failure'));
+        self::assertSame(0, count($transport->calls));
+
+        $sdk->flushAtRequestEnd();
+        self::assertCount(1, $transport->calls);
+        $call = $transport->calls[0] ?? null;
+        self::assertIsArray($call);
+        self::assertLessThanOrEqual(2, count($call['events']));
+        self::assertContains('backend_exception', array_column($call['events'], 'event_type'));
+        $summaries = array_values(array_filter($call['events'],
+            static fn (array $event): bool => $event['event_type'] === 'error_suppressed'));
+        self::assertCount(1, $summaries);
+        self::assertSame(30, $summaries[0]['payload']['suppressed_count']);
+    }
+
+    public function testRequestEndReportsDroppedExceptionsOnce(): void
+    {
+        $transport = new FakeTransport();
+        $sdk = new DebugBundleSdk($transport);
+        $this->sdk = $sdk;
+        $sdk->init(['projectToken' => 'dbundle_proj_test', 'batchSize' => 2]);
+        for ($index = 0; $index < 30; $index++) {
+            $sdk->captureException(new \RuntimeException("distinct exception {$index}"));
+        }
+
+        $sdk->flushAtRequestEnd();
+        $call = $transport->calls[0] ?? null;
+        self::assertIsArray($call);
+        self::assertSame(['backend_exception', 'error_suppressed'],
+            array_column($call['events'], 'event_type'));
+        self::assertSame(29, $call['events'][1]['payload']['suppressed_count']);
     }
 
     public function testRedactsSensitiveRequestFieldsBeforeTransport(): void
@@ -374,7 +564,7 @@ final class DebugBundleSdkTest extends TestCase
         ]);
         $sdk->captureMessage('sampled out', 'error');
         $sdk->flush();
-        self::assertSame(1, $sampledCalls);
+        self::assertSame(0, $sampledCalls);
         self::assertCount(2, $transport->calls);
     }
 

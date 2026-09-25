@@ -62,6 +62,7 @@ final class SchemaValidationTest extends TestCase
                 ]),
             ]),
         ]);
+        $sdk->refreshRemoteConfig(true);
 
         $sdk->probe('checkout.tax', ['rate' => 0.2]);
         $sdk->probe('checkout.deep-tax', ['region' => 'us-east-1'], ['heavy' => true]);

@@ -23,7 +23,7 @@ final class HttpTransport implements TransportInterface
                 'header' => implode("\r\n", $headers),
                 'content' => json_encode(['events' => $request['events'] ?? []], JSON_THROW_ON_ERROR),
                 'ignore_errors' => true,
-                'timeout' => 5,
+                'timeout' => 0.25,
             ],
         ]);
 

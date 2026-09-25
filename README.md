@@ -14,6 +14,12 @@ Requires PHP 8.2 or newer.
 
 `captureErrors()` checks the current `error_reporting()` mask for each error. Warnings, notices and deprecations suppressed with `@` or excluded by that mask are ignored. Enabled errors still follow the existing PHP handler behavior. Explicit `captureException()` calls and fatal shutdown capture remain available independently of the warning mask.
 
+### Version 2.0 delivery limit
+
+Version 2.0 keeps the ordinary Composer install and requires no resident collector. Capturing a batch no longer calls the network. PHP's shutdown hook makes one best-effort send of at most 25 priority-selected events and 256 KiB, with exceptions ahead of routine logs. The built-in stream timeout is 250 ms but is advisory; DNS, slow peers, and custom transports may exceed it. The send occupies a PHP worker while it runs, and unsent events are lost when the request ends or the endpoint is unavailable. Use an application-owned background runner if your deployment requires stronger delivery or zero request-end wait.
+
+`init()` no longer calls `configFetcher`. If you supply one, invoke `refreshRemoteConfig()` from a controlled background or administrative task; do not call it on the request path. `flush()` is an explicit synchronous operation intended for CLI, diagnostics, or controlled shutdown. Existing installed 1.x versions retain their prior behavior until a major upgrade. Review the request-end worker-cost and loss tradeoff before upgrading.
+
 ## Installation
 
 ```bash
@@ -45,8 +51,6 @@ DebugBundle::captureException($throwable);
 DebugBundle::captureLog('payment retry failed', 'warning', ['order_id' => $orderId]);
 DebugBundle::captureMessage('worker started');
 DebugBundle::probe('checkout.cart', ['item_count' => count($cart->items)]);
-
-DebugBundle::flush();
 ```
 
 ## Framework Integrations

@@ -78,6 +78,19 @@ final class HttpTransportTest extends TestCase
         self::assertNull($response->retryAfterMs);
     }
 
+    public function testSlowEndpointUsesShortAdvisoryTimeout(): void
+    {
+        $port = $this->startRouterServer();
+        $transport = new HttpTransport(sprintf('http://127.0.0.1:%d/?delay_ms=3000', $port));
+
+        $started = microtime(true);
+        $response = $transport->send(['project_token' => 'dbundle_proj_test', 'events' => []]);
+        $elapsed = microtime(true) - $started;
+
+        self::assertSame(500, $response->statusCode);
+        self::assertLessThan(1.5, $elapsed);
+    }
+
     private function startRouterServer(): int
     {
         $socket = stream_socket_server('tcp://127.0.0.1:0');

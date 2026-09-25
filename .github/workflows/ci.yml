@@ -44,6 +44,10 @@ jobs:
       - name: App-driven smoke
         run: make smoke
 
+      - name: PHP-FPM request-end safety smoke
+        if: matrix.php-version == '8.2'
+        run: make smoke-fpm
+
   coverage:
     runs-on: ubuntu-latest
 
