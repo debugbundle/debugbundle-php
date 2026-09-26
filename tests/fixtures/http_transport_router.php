@@ -41,4 +41,4 @@ if ($retryAfter !== null && $retryAfter !== '') {
 header('Content-Type: application/json');
 http_response_code($status);
 
-echo '{"ok":true}';
+echo isset($_GET['response_body']) && is_string($_GET['response_body']) ? $_GET['response_body'] : '{"ok":true}';

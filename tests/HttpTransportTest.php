@@ -4,11 +4,70 @@ declare(strict_types=1);
 
 namespace DebugBundle\Tests;
 
+use DebugBundle\DebugBundleSdk;
+use DebugBundle\Tests\Support\ManualClock;
 use DebugBundle\Transport\HttpTransport;
 use PHPUnit\Framework\TestCase;
 
 final class HttpTransportTest extends TestCase
 {
+    public function testBuiltInHttpRetainsUnacknowledgedBatchAndRecovers(): void
+    {
+        $port = $this->startRouterServer();
+        foreach (['',
+            '{"accepted":2,"rejected":0,"errors":{}}',
+            '{"accepted":1,"rejected":1,"errors":{"0":{"index":1,"reason":"rate_limited"}}}',
+            '{"accepted":null,"rejected":2,"errors":[{"index":0,"reason":"rate_limited"},{"index":1,"reason":"rate_limited"}]}',
+            '{"accepted":2,"rejected":0,"errors":null}',
+            '{"accepted":1,"rejected":1,"errors":[{"index":4294967296,"reason":"rate_limited"}]}',
+            '{"accepted":1,"rejected":1,"errors":{"one":{"index":1,"reason":"rate_limited"}}}', '<html>proxy</html>', '{}', '[]', 'null',
+            '{"accepted":1,"rejected":0,"errors":[]}',
+            '{"accepted":0,"rejected":2,"errors":[{"index":0,"reason":"rate_limited"},{"index":0,"reason":"rate_limited"}]}',
+            '{"accepted":1,"rejected":1,"errors":[{"index":2,"reason":"rate_limited"}]}'] as $body) {
+            $clock = new ManualClock();
+            $endpoint = sprintf('http://127.0.0.1:%d/?retry_after=300&response_body=%s', $port, rawurlencode($body));
+            $sdk = new DebugBundleSdk(new HttpTransport($endpoint), [$clock, 'time']);
+            $sdk->init(['projectToken' => 'dbundle_proj_test', 'batchSize' => 100]);
+            try {
+                $sdk->captureMessage('first', 'error');
+                $sdk->captureMessage('second', 'error');
+                $sdk->flush();
+                self::assertNull($sdk->getLastEventAt(), $body);
+                $bufferProperty = new \ReflectionProperty(DebugBundleSdk::class, 'buffer');
+                $buffer = $bufferProperty->getValue($sdk);
+                self::assertIsArray($buffer);
+                self::assertCount(2, $buffer);
+                self::assertSame($clock->now + 300, (new \ReflectionProperty(DebugBundleSdk::class, 'retryAfter'))->getValue($sdk));
+                $valid = '{"accepted":2,"rejected":0,"errors":[]}';
+                (new \ReflectionProperty(DebugBundleSdk::class, 'transport'))->setValue($sdk,
+                    new HttpTransport(sprintf('http://127.0.0.1:%d/?response_body=%s', $port, rawurlencode($valid))));
+                $sdk->flush();
+                self::assertNull($sdk->getLastEventAt());
+                $clock->advance(301);
+                $sdk->flush();
+                self::assertNotNull($sdk->getLastEventAt());
+                self::assertSame([], $bufferProperty->getValue($sdk));
+            } finally {
+                $sdk->reset();
+            }
+        }
+    }
+
+    public function testRetryAfterHintsAreBoundedBeforeIntegerConversion(): void
+    {
+        $port = $this->startRouterServer();
+        foreach (['0.25' => 250, '999999' => 300000, '1e300' => 300000, '-1' => 0,
+            'NaN' => null, 'Infinity' => null, 'nope' => null,
+            gmdate('D, d M Y H:i:s', time() + 86400) . ' GMT' => 300000,
+            'Sun, 06 Nov 1994 08:49:37 GMT' => 0,
+            'Wednesday, 01-Jan-31 00:00:00 GMT' => 300000,
+            'Wed Jan  1 00:00:00 2031' => 300000] as $header => $expected) {
+            $transport = new HttpTransport(sprintf('http://127.0.0.1:%d/?status=429&retry_after=%s', $port, rawurlencode((string) $header)));
+            $response = $transport->send(['project_token' => 'dbundle_proj_test', 'events' => []]);
+            self::assertSame($expected, $response->retryAfterMs, (string) $header);
+        }
+    }
+
     /** @var resource|null */
     private $serverProcess = null;
 

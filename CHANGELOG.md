@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-09-26
+
+### Fixed
+
+- Start retry delays at response receipt, honor service-failure hints and accept obsolete HTTP-date formats. Preserve existing no-hint service-failure timing.
+- Require a valid canonical acknowledgement from built-in HTTP delivery; retain the full batch and back off for missing or malformed responses. Preserve bodyless file and explicit custom transport compatibility.
+- Cap transport retry hints at five minutes before scheduling retries, including custom transport results.
+- Parse numeric and HTTP-date Retry-After safely, bounding before conversion and ignoring invalid or nonfinite hints.
+
 ## [2.0.0] - 2026-09-25
 
 ### Changed

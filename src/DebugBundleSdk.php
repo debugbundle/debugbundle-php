@@ -7,6 +7,7 @@ namespace DebugBundle;
 use DebugBundle\Transport\IngestionAcknowledgementDecision;
 use DebugBundle\Logging\DebugBundleHandler;
 use DebugBundle\Transport\HttpTransport;
+use DebugBundle\Transport\RetryAfter;
 use DebugBundle\Transport\TransportInterface;
 use Monolog\Logger;
 
@@ -17,7 +18,7 @@ final class DebugBundleSdk
     use DebugBundleSdkQueueSupport;
 
     private const SDK_NAME = 'debugbundle/sdk-php';
-    private const SDK_VERSION = '2.0.0';
+    private const SDK_VERSION = '2.0.1';
     private const SCHEMA_VERSION = '2026-03-01';
     private const DEFAULT_ENDPOINT = 'https://api.debugbundle.com/v1/events';
     private const DEFAULT_BATCH_SIZE = 25;
@@ -470,11 +471,11 @@ final class DebugBundleSdk
         }
 
         if ($response->statusCode >= 200 && $response->statusCode < 300) {
-            $acknowledgement = IngestionAcknowledgementDecision::decide($response->body, count($batch));
+            $acknowledgement = IngestionAcknowledgementDecision::decide($response->body, count($batch), $this->transport instanceof HttpTransport);
             if ($acknowledgement->kind === 'protocol_failure') {
                 $this->consecutiveFailures++;
-                $retryAfterMs = $response->retryAfterMs ?? 1000;
-                $this->retryAfter = $now + ($retryAfterMs / 1000);
+                $retryAfterMs = RetryAfter::bounded($response->retryAfterMs);
+                $this->retryAfter = $this->now() + ($retryAfterMs / 1000);
                 return;
             }
             if ($acknowledgement->kind === 'legacy') {
@@ -498,8 +499,8 @@ final class DebugBundleSdk
             }
             if ($retryableEvents !== []) {
                 $this->consecutiveFailures++;
-                $retryAfterMs = $response->retryAfterMs ?? 1000;
-                $this->retryAfter = $now + ($retryAfterMs / 1000);
+                $retryAfterMs = RetryAfter::bounded($response->retryAfterMs);
+                $this->retryAfter = $this->now() + ($retryAfterMs / 1000);
                 return;
             }
             $this->retryAfter = 0.0;
@@ -508,9 +509,9 @@ final class DebugBundleSdk
         }
 
         $this->consecutiveFailures++;
-        if ($response->statusCode === 429) {
-            $retryAfterMs = $response->retryAfterMs ?? 1000;
-            $this->retryAfter = $now + ($retryAfterMs / 1000);
+        if ($response->statusCode === 429 || ($response->statusCode >= 500 && $response->retryAfterMs !== null)) {
+            $retryAfterMs = RetryAfter::bounded($response->retryAfterMs);
+            $this->retryAfter = $this->now() + ($retryAfterMs / 1000);
             return;
         }
 

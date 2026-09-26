@@ -27,10 +27,10 @@ final class IngestionAcknowledgementDecision
         $this->terminalErrors = $terminalErrors;
     }
 
-    public static function decide(mixed $body, int $batchLength): self
+    public static function decide(mixed $body, int $batchLength, bool $required = false): self
     {
         if (!is_array($body) || !self::hasAcknowledgementFields($body)) {
-            return new self('legacy');
+            return $required ? new self('protocol_failure', reason: 'missing_acknowledgement') : new self('legacy');
         }
 
         $accepted = $body['accepted'] ?? null;
@@ -40,6 +40,7 @@ final class IngestionAcknowledgementDecision
             !self::isCount($accepted)
             || !self::isCount($rejected)
             || !is_array($errors)
+            || !array_is_list($errors)
             || $accepted + $rejected !== $batchLength
             || count($errors) !== $rejected
         ) {

@@ -47,9 +47,7 @@ final class HttpTransport implements TransportInterface
 
             if (stripos($headerLine, 'Retry-After:') === 0) {
                 $retryAfter = trim(substr($headerLine, strlen('Retry-After:')));
-                if (is_numeric($retryAfter)) {
-                    $retryAfterMs = (int) round((float) $retryAfter * 1000);
-                }
+                $retryAfterMs = RetryAfter::parse($retryAfter);
             }
         }
 
@@ -57,6 +55,13 @@ final class HttpTransport implements TransportInterface
         if (is_string($responseBody) && $responseBody !== '') {
             try {
                 $decodedBody = json_decode($responseBody, true, 512, JSON_THROW_ON_ERROR);
+                if (is_array($decodedBody) && array_key_exists('errors', $decodedBody)) {
+                    // Associative decoding loses the distinction between [] and {} (or numeric-key objects).
+                    $wireBody = json_decode($responseBody, false, 512, JSON_THROW_ON_ERROR);
+                    if ($wireBody instanceof \stdClass && !is_array($wireBody->errors)) {
+                        $decodedBody = null;
+                    }
+                }
             } catch (\JsonException) {
                 $decodedBody = null;
             }
