@@ -178,7 +178,7 @@ final class TelemetryPrivacy
         $text = (string) preg_replace('/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i', self::REDACTED, $text);
         $text = (string) preg_replace('/\b(Authorization|Proxy-Authorization|Cookie|Set-Cookie)\s*:\s*[^\r\n]*/i', '$1: [REDACTED]', $text);
         $text = (string) preg_replace('/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/-]{6,}/i', '$1 [REDACTED]', $text);
-        $text = (string) preg_replace('/\bdbundle_(?:proj|mem|probe|agent)_[A-Za-z0-9_-]+\b/', self::REDACTED, $text);
+        $text = (string) preg_replace('/\bdbundle_(?:proj|mem|probe|agent|anl|anr|ah)_[A-Za-z0-9_-]+\b/', self::REDACTED, $text);
         $labels = 'authorization|cookie|credit_card|card_number|password|passwd|secret|ssn|token|api_key|client_secret|access_token|refresh_token|private_key|accessToken|refreshToken|privateKey|clientSecret|session_id|cvv|cvc|pin|expiry|phone|otp|verification_code';
         $text = (string) preg_replace('/\b(' . $labels . ')\b(["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s&,;]+)/i', '$1$2[REDACTED]', $text);
         foreach ($extra as $field) {
