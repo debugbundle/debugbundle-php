@@ -18,7 +18,7 @@ final class DebugBundleSdk
     use DebugBundleSdkQueueSupport;
 
     private const SDK_NAME = 'debugbundle/sdk-php';
-    private const SDK_VERSION = '2.0.1';
+    private const SDK_VERSION = '2.0.2';
     private const SCHEMA_VERSION = '2026-03-01';
     private const DEFAULT_ENDPOINT = 'https://api.debugbundle.com/v1/events';
     private const DEFAULT_BATCH_SIZE = 25;
@@ -648,9 +648,10 @@ final class DebugBundleSdk
         $this->capturedExceptions[$error] = true;
 
         $redactedContext = $this->redactArray($context ?? []);
+        $message = $error->getMessage();
         $payload = [
             'name' => $error::class,
-            'message' => $error->getMessage(),
+            'message' => $message === '' ? $error::class : $message,
             'stack' => $this->stringifyThrowable($error),
             'handled' => $handled,
             'request' => $this->buildRequestPayload($redactedContext['request'] ?? null),

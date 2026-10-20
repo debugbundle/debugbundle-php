@@ -35,7 +35,7 @@ smoke-artifact:
 smoke-worktree:
 	mkdir -p "$(SMOKE_DIST_DIR)"
 	rm -f "$(SMOKE_DIST_DIR)/debugbundle-sdk-php-worktree.zip"
-	$(DOCKER_RUN) sh -c 'zip -q -r smoke/dist/debugbundle-sdk-php-worktree.zip . -x ".git/*" "vendor/*" "smoke/dist/*" ".phpunit.cache/*" "coverage.xml" "composer.phar" "composer-setup.php"'
+	$(DOCKER_RUN) sh -c 'zip -q -r smoke/dist/debugbundle-sdk-php-worktree.zip . -x ".git/*" ".debugbundle/*" ".env" ".env.*" "vendor/*" "smoke/dist/*" ".phpunit.cache/*" "coverage.xml" "composer.phar" "composer-setup.php"'
 	$(DOCKER_RUN) php smoke/run_app_driven_smoke.php --artifact smoke/dist/debugbundle-sdk-php-worktree.zip --version "$(PACKAGE_VERSION)"
 
 .PHONY: smoke-fpm

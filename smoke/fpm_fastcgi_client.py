@@ -85,6 +85,13 @@ def main() -> None:
         "inline_calls": 0,
         "request_end_calls": 1,
         "event_types": ["backend_exception", "error_suppressed"],
+        "exception_message": "RuntimeException",
+        "exception_request": {
+            "method": "UNKNOWN",
+            "path": "/",
+            "headers": {},
+            "query": {},
+        },
         "suppressed_count": 30,
     }:
         raise RuntimeError(f"Unexpected FPM capture result: {result}")

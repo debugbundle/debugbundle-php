@@ -14,6 +14,8 @@ Requires PHP 8.2 or newer.
 
 `captureErrors()` checks the current `error_reporting()` mask for each error. Warnings, notices and deprecations suppressed with `@` or excluded by that mask are ignored. Enabled errors still follow the existing PHP handler behavior. Explicit `captureException()` calls and fatal shutdown capture remain available independently of the warning mask.
 
+Exception capture uses the throwable class as the message when `getMessage()` is empty, before `beforeSend` and duplicate suppression. Nonempty messages (including `"0"`) and the original stack are preserved, subject to mandatory redaction. Captures without request context use empty JSON objects for request headers and query parameters.
+
 ### Version 2.0 delivery limit
 
 Version 2.0 keeps the ordinary Composer install and requires no resident collector. Capturing a batch no longer calls the network. PHP's shutdown hook makes one best-effort send of at most 25 priority-selected events and 256 KiB, with exceptions ahead of routine logs. The built-in stream timeout is 250 ms but is advisory; DNS, slow peers, and custom transports may exceed it. The send occupies a PHP worker while it runs, and unsent events are lost when the request ends or the endpoint is unavailable. Use an application-owned background runner if your deployment requires stronger delivery or zero request-end wait.

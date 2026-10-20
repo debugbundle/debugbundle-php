@@ -23,7 +23,8 @@ if (isset($_SERVER['CONTENT_TYPE']) && is_string($_SERVER['CONTENT_TYPE'])) {
     $headers['Content-Type'] = $_SERVER['CONTENT_TYPE'];
 }
 
-$body = json_decode((string) file_get_contents('php://input'), true, 512, JSON_THROW_ON_ERROR);
+$bodyJson = (string) file_get_contents('php://input');
+$body = json_decode($bodyJson, true, 512, JSON_THROW_ON_ERROR);
 file_put_contents(
     $captureFile,
     json_encode([
@@ -31,6 +32,7 @@ file_put_contents(
         'path' => $_SERVER['REQUEST_URI'] ?? '/',
         'headers' => $headers,
         'body' => $body,
+        'body_json' => $bodyJson,
     ], JSON_THROW_ON_ERROR) . PHP_EOL,
     FILE_APPEND
 );

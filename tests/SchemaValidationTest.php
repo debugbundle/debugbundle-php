@@ -10,6 +10,7 @@ use DebugBundle\Tests\Support\FakeConfigResponse;
 use DebugBundle\Tests\Support\FakeTransport;
 use Opis\JsonSchema\Errors\ErrorFormatter;
 use Opis\JsonSchema\Validator;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class SchemaValidationTest extends TestCase
@@ -22,6 +23,111 @@ final class SchemaValidationTest extends TestCase
         $this->sdk = null;
 
         parent::tearDown();
+    }
+
+    /** @return iterable<string, array{\Throwable, string, bool}> */
+    public static function exceptionMessages(): iterable
+    {
+        $cases = [
+            'empty exception' => [new \Exception(), \Exception::class],
+            'empty runtime exception' => [new \RuntimeException(), \RuntimeException::class],
+            'empty native error' => [new \Error(), \Error::class],
+            'empty HTTP exception' => [
+                new \Symfony\Component\HttpKernel\Exception\NotFoundHttpException(),
+                \Symfony\Component\HttpKernel\Exception\NotFoundHttpException::class,
+            ],
+            'nonempty message' => [new \RuntimeException('database unavailable'), 'database unavailable'],
+            'zero message' => [new \RuntimeException('0'), '0'],
+            'whitespace message' => [new \RuntimeException(' '), ' '],
+        ];
+        foreach ($cases as $name => [$error, $expectedMessage]) {
+            yield $name => [$error, $expectedMessage, false];
+            yield $name . ' with hook' => [$error, $expectedMessage, true];
+        }
+    }
+
+    #[DataProvider('exceptionMessages')]
+    public function testExceptionMessagesMeetCanonicalSchema(
+        \Throwable $error,
+        string $expectedMessage,
+        bool $withHook
+    ): void {
+        $transport = new FakeTransport();
+        $this->sdk = new DebugBundleSdk($transport);
+        $hookMessages = [];
+        $config = ['projectToken' => 'dbundle_proj_test'];
+        if ($withHook) {
+            $config['beforeSend'] = static function (array $event) use (&$hookMessages): array {
+                $hookMessages[] = $event['payload']['message'];
+                return $event;
+            };
+        }
+        $this->sdk->init($config);
+        $this->sdk->captureException($error);
+        $this->sdk->flush();
+
+        self::assertCount(1, $transport->calls);
+        self::assertCount(1, $transport->calls[0]['events']);
+        $event = $transport->calls[0]['events'][0];
+        $schema = json_decode((string) file_get_contents(__DIR__ . '/fixtures/event-envelope.schema.json'));
+        $result = (new Validator())->validate(json_decode((string) json_encode($event)), $schema);
+        $validationError = $result->error();
+        $details = $validationError === null ? '' : json_encode((new ErrorFormatter())->format($validationError));
+        self::assertTrue($result->isValid(), 'Captured exception must satisfy the ingestion event schema: ' . $details);
+        self::assertSame($expectedMessage, $event['payload']['message']);
+        self::assertSame($error::class, $event['payload']['name']);
+        self::assertSame((string) $error, $event['payload']['stack']);
+        self::assertTrue($event['payload']['handled']);
+        self::assertSame($withHook ? [$expectedMessage] : [], $hookMessages);
+    }
+
+    /** @return iterable<string, array{string, ?string}> */
+    public static function exceptionHookOutcomes(): iterable
+    {
+        yield 'valid replacement is redacted' => ['replace', 'replacement password=[REDACTED]'];
+        yield 'invalid replacement retains original' => ['invalid', \RuntimeException::class];
+        yield 'throwing hook retains original' => ['throw', \RuntimeException::class];
+        yield 'null drops event' => ['drop', null];
+    }
+
+    #[DataProvider('exceptionHookOutcomes')]
+    public function testEmptyExceptionKeepsHookAndPrivacySemantics(string $mode, ?string $expectedMessage): void
+    {
+        $transport = new FakeTransport();
+        $this->sdk = new DebugBundleSdk($transport);
+        $this->sdk->init([
+            'projectToken' => 'dbundle_proj_test',
+            'beforeSend' => static function (array $event) use ($mode): ?array {
+                if ($mode === 'drop') {
+                    return null;
+                }
+                // The hook owns a clone even for the newly canonical empty object maps.
+                $event['payload']['request']['headers']->authorization = 'Bearer HOOK_SECRET';
+                if ($mode === 'throw') {
+                    throw new \RuntimeException('hook failed');
+                }
+                $event['payload']['message'] = $mode === 'invalid' ? '' : 'replacement password=HOOK_SECRET';
+                return $event;
+            },
+        ]);
+        $this->sdk->captureError(new \RuntimeException());
+        self::assertCount(0, $transport->calls);
+        $this->sdk->flush();
+
+        if ($expectedMessage === null) {
+            self::assertSame([], $transport->calls);
+            return;
+        }
+        self::assertCount(1, $transport->calls);
+        $event = $transport->calls[0]['events'][0];
+        self::assertSame($expectedMessage, $event['payload']['message']);
+        self::assertStringNotContainsString('HOOK_SECRET', json_encode($event, JSON_THROW_ON_ERROR));
+        self::assertSame(
+            $mode === 'replace' ? ['authorization' => '[REDACTED]'] : [],
+            (array) $event['payload']['request']['headers']
+        );
+        $schema = json_decode((string) file_get_contents(__DIR__ . '/fixtures/event-envelope.schema.json'));
+        self::assertTrue((new Validator())->validate(json_decode(json_encode($event, JSON_THROW_ON_ERROR)), $schema)->isValid());
     }
 
     public function testEmittedPhpSdkEventsValidateAgainstVendoredEventEnvelopeSchema(): void

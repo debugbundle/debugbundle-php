@@ -65,8 +65,8 @@ trait DebugBundleSdkEventSupport
             return [
                 'method' => 'UNKNOWN',
                 'path' => '/',
-                'headers' => [],
-                'query' => [],
+                'headers' => $this->normalizeMap([]),
+                'query' => $this->normalizeMap([]),
             ];
         }
 

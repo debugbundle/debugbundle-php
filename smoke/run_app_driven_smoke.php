@@ -36,7 +36,7 @@ function main(array $argv): void
 
         require $projectDir . '/vendor/autoload.php';
 
-        $captureFile = tempnam(sys_get_temp_dir(), 'debugbundle-php-smoke-capture-');
+        $captureFile = tempnam($projectDir, 'capture-');
         if ($captureFile === false) {
             throw new RuntimeException('Failed to allocate capture file for the smoke server.');
         }
@@ -44,7 +44,7 @@ function main(array $argv): void
         $captureServer = startCaptureServer($repoRoot, $captureFile);
 
         runServerEventSmoke($captureServer['endpoint'], (string) $options['version']);
-        runRelaySmoke($captureServer['endpoint']);
+        runRelaySmoke($captureServer['endpoint'], $projectDir . '/relay-spool');
 
         $requests = readCapturedRequests($captureFile);
         validateCapturedRequests($requests, $schemaPath, (string) $options['version']);
@@ -217,8 +217,8 @@ function startCaptureServer(string $repoRoot, string $captureFile): array
 
     $port = (int) substr((string) strrchr($address, ':'), 1);
     $routerPath = $repoRoot . '/smoke/ingest_capture_router.php';
-    $stdoutPath = tempnam(sys_get_temp_dir(), 'debugbundle-php-smoke-out-');
-    $stderrPath = tempnam(sys_get_temp_dir(), 'debugbundle-php-smoke-err-');
+    $stdoutPath = tempnam(dirname($captureFile), 'server-out-');
+    $stderrPath = tempnam(dirname($captureFile), 'server-err-');
 
     $process = proc_open(
         [PHP_BINARY, '-S', sprintf('127.0.0.1:%d', $port), $routerPath],
@@ -282,6 +282,7 @@ function runServerEventSmoke(string $endpoint, string $expectedVersion): void
 
     $sdk->beginRequest($request);
     $sdk->captureMessage('php app-driven smoke message', 'error', ['feature' => 'app-driven-smoke', 'note' => 'password=PACKED_SMOKE_SECRET']);
+    $sdk->captureException(new \RuntimeException(), ['feature' => 'app-driven-smoke', 'note' => 'password=PACKED_SMOKE_SECRET']);
     $sdk->captureRequest(
         $request,
         [
@@ -307,7 +308,7 @@ function runServerEventSmoke(string $endpoint, string $expectedVersion): void
     }
 }
 
-function runRelaySmoke(string $endpoint): void
+function runRelaySmoke(string $endpoint, string $spoolDir): void
 {
     $controller = new \DebugBundle\Framework\Symfony\DebugBundleRelayController([
         'allowedOrigins' => ['https://app.example.com'],
@@ -315,6 +316,7 @@ function runRelaySmoke(string $endpoint): void
         'projectToken' => PROJECT_TOKEN,
         'endpoint' => $endpoint,
         'durableWrite' => true,
+        'spoolDir' => $spoolDir,
     ]);
 
     $relayRequest = \Symfony\Component\HttpFoundation\Request::create(
@@ -428,17 +430,17 @@ function validateCapturedRequests(array $requests, string $schemaPath, string $e
     $formatter = new \Opis\JsonSchema\Errors\ErrorFormatter();
 
     $serverEvents = $serverRequest['body']['events'];
-    if (count($serverEvents) < 2) {
-        throw new RuntimeException('Expected the server smoke request to include both a log_event and a request_event.');
+    if (count($serverEvents) < 3) {
+        throw new RuntimeException('Expected the server smoke request to include log, exception and request events.');
     }
 
     $serverEventTypes = array_map(static fn (array $event): string => (string) ($event['event_type'] ?? ''), $serverEvents);
-    if (!in_array('log_event', $serverEventTypes, true) || !in_array('request_event', $serverEventTypes, true)) {
-        throw new RuntimeException('Expected the server smoke request to include log_event and request_event payloads.');
+    if (array_diff(['log_event', 'backend_exception', 'request_event'], $serverEventTypes) !== []) {
+        throw new RuntimeException('Expected the server smoke request to include log, exception and request event payloads.');
     }
 
-    foreach ($serverEvents as $event) {
-        assertSchemaValid($validator, $formatter, $schema, $event);
+    foreach ($serverEvents as $index => $event) {
+        assertSchemaValid($validator, $formatter, $schema, $serverRequest, $index);
         if (($event['sdk_name'] ?? null) !== 'debugbundle/sdk-php') {
             throw new RuntimeException('Expected server events to keep the PHP SDK name.');
         }
@@ -463,13 +465,21 @@ function validateCapturedRequests(array $requests, string $schemaPath, string $e
         throw new RuntimeException('Expected the server smoke request_event to capture the smoke route path and 503 response.');
     }
 
+    $smokeExceptionEvent = findEventByType($serverEvents, 'backend_exception');
+    if (($smokeExceptionEvent['payload']['message'] ?? null) !== \RuntimeException::class
+        || ($smokeExceptionEvent['payload']['name'] ?? null) !== \RuntimeException::class
+        || ($smokeExceptionEvent['payload']['handled'] ?? null) !== true
+        || ($smokeExceptionEvent['payload']['request']['method'] ?? null) !== 'UNKNOWN') {
+        throw new RuntimeException('Expected empty exception capture without request context to preserve its class and handled status.');
+    }
+
     $relayEvents = $relayRequest['body']['events'];
     if (count($relayEvents) !== 1) {
         throw new RuntimeException(sprintf('Expected one forwarded relay event, received %d.', count($relayEvents)));
     }
 
     $relayEvent = $relayEvents[0];
-    assertSchemaValid($validator, $formatter, $schema, $relayEvent);
+    assertSchemaValid($validator, $formatter, $schema, $relayRequest, 0);
     if (($relayEvent['sdk_name'] ?? null) !== '@debugbundle/sdk-browser') {
         throw new RuntimeException('Expected the relay smoke event to force the browser SDK name.');
     }
@@ -485,9 +495,11 @@ function validateCapturedRequests(array $requests, string $schemaPath, string $e
     }
 }
 
-function assertSchemaValid(\Opis\JsonSchema\Validator $validator, \Opis\JsonSchema\Errors\ErrorFormatter $formatter, object $schema, array $event): void
+function assertSchemaValid(\Opis\JsonSchema\Validator $validator, \Opis\JsonSchema\Errors\ErrorFormatter $formatter, object $schema, array $request, int $index): void
 {
-    $result = $validator->validate(json_decode((string) json_encode($event, JSON_THROW_ON_ERROR)), $schema);
+    // Validate the wire JSON: associative decoding erases the difference between {} and [].
+    $body = json_decode((string) ($request['body_json'] ?? ''), false, 512, JSON_THROW_ON_ERROR);
+    $result = $validator->validate($body->events[$index] ?? null, $schema);
     if ($result->isValid()) {
         return;
     }

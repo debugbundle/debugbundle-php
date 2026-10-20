@@ -31,7 +31,7 @@ for ($index = 0; $index < 10_000; $index++) {
 for ($index = 0; $index < 30; $index++) {
     $sdk->captureLog("warning {$index}", 'warning');
 }
-$sdk->captureException(new RuntimeException('fpm priority exception'));
+$sdk->captureException(new RuntimeException());
 $inlineCalls = count($transport->calls);
 
 register_shutdown_function(static function () use ($transport, $inlineCalls): void {
@@ -41,6 +41,8 @@ register_shutdown_function(static function () use ($transport, $inlineCalls): vo
         'inline_calls' => $inlineCalls,
         'request_end_calls' => count($transport->calls),
         'event_types' => array_column($events, 'event_type'),
+        'exception_message' => $events[0]['payload']['message'] ?? null,
+        'exception_request' => $events[0]['payload']['request'] ?? null,
         'suppressed_count' => array_values(array_filter($events,
             static fn (array $event): bool => $event['event_type'] === 'error_suppressed'))[0]['payload']['suppressed_count'] ?? null,
     ], JSON_THROW_ON_ERROR);

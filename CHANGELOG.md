@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-10-20
+
+### Fixed
+
+- Use the throwable class as the message when PHP exceptions or errors have an empty message, before `beforeSend` and duplicate suppression. Preserve nonempty messages and the original stack.
+- Encode missing exception request headers and query maps as JSON objects so captures without request context satisfy the ingestion schema.
+- Exercise empty exception capture in installed-package and PHP-FPM release checks; validate original wire JSON and isolate smoke state from worktree packages.
+
 ## [2.0.1] - 2026-09-26
 
 ### Fixed
