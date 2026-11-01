@@ -12,7 +12,7 @@ final class DebugBundleRelayMiddleware
 {
     private BrowserRelayHandler $handler;
 
-    /** @param array{allowedOrigins?:list<string>,maxBodyBytes?:int,rateLimitPerMinute?:int,onAccept?:callable(\DebugBundle\Relay\BrowserRelayAcceptedBatch):void,projectMode?:string,projectToken?:string,endpoint?:string,localEventsDir?:string,spoolDir?:string,durableWrite?:bool,service?:string,environment?:string,forwardTransport?:\DebugBundle\Transport\TransportInterface,rateLimitStore?:\DebugBundle\Relay\BrowserRelayRateLimitStore} $options */
+    /** @param array{allowedOrigins?:list<string>,maxBodyBytes?:int,rateLimitPerMinute?:int,onAccept?:callable(\DebugBundle\Relay\BrowserRelayAcceptedBatch):void,projectMode?:string,projectToken?:string,endpoint?:string,localEventsDir?:string,spoolDir?:string,durableWrite?:bool,service?:string,environment?:string,forwardTransport?:\DebugBundle\Transport\TransportInterface,rateLimitStore?:\DebugBundle\Relay\BrowserRelayRateLimitStore,evidenceCapabilities?:mixed} $options */
     public function __construct(array $options = [], private readonly string $routePath = '/debugbundle/browser')
     {
         $this->handler = new BrowserRelayHandler($options);
@@ -26,6 +26,7 @@ final class DebugBundleRelayMiddleware
 
         $response = $this->handler->handle([
             'method' => $request->getMethod(),
+            'url' => $request->getRequestUri(),
             'headers' => $this->normalizeHeaders($request->headers->all()),
             'body' => (string) $request->getContent(),
             'ipAddress' => $request->ip(),

@@ -18,6 +18,7 @@ final class CapturePolicy
         public readonly string $captureProbeEvents,
         public readonly array $immediateClientErrorStatuses,
         public readonly array $immediateClientErrorPathRules = [],
+        public readonly bool $captureDiagnosticContext = true,
     ) {
     }
 }
@@ -182,6 +183,7 @@ final class RemoteConfig
         $captureRequestEvents = self::asNonEmptyString($payload['capture_request_events'] ?? null);
         $captureBreadcrumbs = self::asNonEmptyString($payload['capture_breadcrumbs'] ?? null);
         $captureProbeEvents = self::asNonEmptyString($payload['capture_probe_events'] ?? null);
+        $captureDiagnosticContext = array_key_exists('capture_diagnostic_context', $payload) ? $payload['capture_diagnostic_context'] : true;
         $immediateClientErrorStatuses = self::parseImmediateClientErrorStatuses($payload['immediate_client_error_statuses'] ?? null);
         $immediateClientErrorPathRules = self::parseImmediateClientErrorPathRules($payload['immediate_client_error_path_rules'] ?? null);
 
@@ -197,6 +199,7 @@ final class RemoteConfig
         if (!in_array($captureProbeEvents, ['buffer_only', 'standalone_when_activated'], true)) {
             return null;
         }
+        if (!is_bool($captureDiagnosticContext)) return null;
         if ($immediateClientErrorStatuses === null || $immediateClientErrorPathRules === null) {
             return null;
         }
@@ -209,6 +212,7 @@ final class RemoteConfig
             $captureProbeEvents,
             $immediateClientErrorStatuses,
             $immediateClientErrorPathRules,
+            $preset !== 'minimal' && $captureDiagnosticContext,
         );
     }
 

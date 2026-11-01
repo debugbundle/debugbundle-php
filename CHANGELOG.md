@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+- Read native chunked HTTP acknowledgements without casting PHP's decoding stream to a socket; retain the same response byte cap and whole-response deadline.
+- Validate complete hook envelopes with the vendored accepting schema; own native
+  JSON without application serializers/clone handlers and revalidate privacy
+  output. Withhold exhausted or unfit valid replacements without undoing redaction.
+- Bound native and relay HTTP bodies by final JSON bytes, preserving ordered
+  pending tails and existing request-end/custom delivery behaviour. Chunks share
+  the existing native deadline. Relays reject malformed metadata, count server
+  credentials and require complete canonical ACKs for exclusive private markers.
+
+- Add optional bounded native previous-exception/frame evidence, honest native
+  fatal origins and Fiber-local request/command/job context behind complete-path
+  capability proof. Preserve original errors and smaller fatal budgets.
+- Add explicitly opted-in, policy-gated recovery observations with bounded
+  pending ownership through hooks, queue pressure, acknowledgement and reset.
+- Preserve new evidence through PHP relays with downstream capability
+  intersection, legacy response compatibility and original-error-only downgrade.
+- Bound native HTTP response bodies and their read deadline; guard hook/probe
+  reentrancy and destination changes without invoking custom error formatters.
+- Qualify the candidate with canonical wire schemas, real PHP 8.2/8.5 engine
+  fatals, installed-package smoke checks and legacy/enriched PHP-FPM paths.
+
 ## [2.0.2] - 2026-10-20
 
 ### Fixed

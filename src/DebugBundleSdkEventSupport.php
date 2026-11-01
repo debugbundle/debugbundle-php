@@ -125,8 +125,8 @@ trait DebugBundleSdkEventSupport
     private function buildCorrelation(array $context = []): array
     {
         return [
-            'request_id' => $this->readContextString('request_id', $context) ?? ($this->requestCorrelation['request_id'] ?? null),
-            'trace_id' => $this->readContextString('trace_id', $context) ?? ($this->requestCorrelation['trace_id'] ?? null),
+            'request_id' => $this->readContextString('request_id', $context) ?? ($this->operations->current()?->correlation['request_id'] ?? null),
+            'trace_id' => $this->readContextString('trace_id', $context) ?? ($this->operations->current()?->correlation['trace_id'] ?? null),
             'session_id' => $this->readContextString('session_id', $context),
             'user_id_hash' => $this->readContextString('user_id_hash', $context),
         ];
@@ -158,6 +158,7 @@ trait DebugBundleSdkEventSupport
      */
     private function emitProbeEvents(string $label, array $value, array $directives): void
     {
+        $generation = $this->generation;
         foreach ($directives as $directive) {
             $event = $this->applyBeforeSend($this->baseEvent('probe_event', [
                 'label' => $label,
@@ -165,6 +166,7 @@ trait DebugBundleSdkEventSupport
                 'activation_id' => $directive->id,
                 'probe_label_pattern' => $directive->labelPattern,
             ]));
+            if ($generation !== $this->generation) return;
             if ($event !== null && $this->capturePolicy->captureProbeEvents === 'standalone_when_activated') {
                 $this->enqueueEvent($event);
             }
@@ -217,6 +219,6 @@ trait DebugBundleSdkEventSupport
 
     private function stringifyThrowable(\Throwable $error): string
     {
-        return $error->__toString();
+        return ExceptionEvidence::legacyStack($error);
     }
 }

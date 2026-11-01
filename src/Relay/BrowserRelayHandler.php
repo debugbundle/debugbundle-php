@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace DebugBundle\Relay;
 
 use DebugBundle\TelemetryPrivacy;
+use DebugBundle\EvidenceWire;
 
 use DebugBundle\Transport\TransportInterface;
 
@@ -22,6 +23,7 @@ final class BrowserRelayHandler
         'request_event',
         'probe_event',
         'analytics_event',
+        'diagnostic_context',
     ];
 
     /** @var list<string> */
@@ -43,6 +45,7 @@ final class BrowserRelayHandler
     private ?string $environmentOverride;
     private ?RelayForwardTransport $forwardTransport;
     private BrowserRelayRateLimitStore $rateLimitStore;
+    private RelayEvidencePath $evidence;
 
     /** @var array<string, RelayFileTransport> */
     private array $localTransports = [];
@@ -50,7 +53,7 @@ final class BrowserRelayHandler
     /** @var array<string, RelayFileTransport> */
     private array $spoolTransports = [];
 
-    /** @param array{allowedOrigins?:list<string>,maxBodyBytes?:int,rateLimitPerMinute?:int,onAccept?:callable(BrowserRelayAcceptedBatch):void,projectMode?:string,projectToken?:string,endpoint?:string,localEventsDir?:string,spoolDir?:string,durableWrite?:bool,service?:string,environment?:string,forwardTransport?:TransportInterface,rateLimitStore?:BrowserRelayRateLimitStore} $options */
+    /** @param array{allowedOrigins?:list<string>,maxBodyBytes?:int,rateLimitPerMinute?:int,onAccept?:callable(BrowserRelayAcceptedBatch):void,projectMode?:string,projectToken?:string,endpoint?:string,localEventsDir?:string,spoolDir?:string,durableWrite?:bool,service?:string,environment?:string,forwardTransport?:TransportInterface,rateLimitStore?:BrowserRelayRateLimitStore,evidenceCapabilities?:mixed} $options */
     public function __construct(array $options = [])
     {
         $this->allowedOrigins = array_values(array_filter(
@@ -76,27 +79,31 @@ final class BrowserRelayHandler
         $this->serviceOverride = isset($options['service']) && $options['service'] !== '' ? (string) $options['service'] : null;
         $this->environmentOverride = isset($options['environment']) && $options['environment'] !== '' ? (string) $options['environment'] : null;
         $this->rateLimitStore = $options['rateLimitStore'] ?? new InMemoryBrowserRelayRateLimitStore();
+        $this->evidence = new RelayEvidencePath($options['evidenceCapabilities'] ?? null);
         $this->forwardTransport = $this->projectMode === 'connected'
             ? (isset($options['forwardTransport'])
-                ? new RelayForwardTransport($options['forwardTransport'])
-                : ($this->endpoint !== null ? RelayForwardTransport::fromEndpoint($this->endpoint) : null))
+                ? new RelayForwardTransport($options['forwardTransport'], $this->evidence)
+                : ($this->endpoint !== null ? RelayForwardTransport::fromEndpoint($this->endpoint, $this->evidence) : null))
             : null;
     }
 
-    /** @param array{method?:string,headers?:array<string,string>,body:string,ipAddress?:string|null} $request */
+    /** @param array{method?:string,url?:string,headers?:array<string,string>,body:string,ipAddress?:string|null} $request */
     public function handle(array $request): BrowserRelayResponse
     {
         $method = strtoupper((string) ($request['method'] ?? 'POST'));
         $headers = $this->normalizeHeaders($request['headers'] ?? []);
         $sourceOrigin = $this->sourceOrigin($headers);
+        $discover = RelayEvidencePath::requested($request['url'] ?? null, $headers);
         if (!$this->isOriginAllowed($headers)) {
             return new BrowserRelayResponse(403);
         }
 
         $responseHeaders = is_string($sourceOrigin) ? $this->corsHeaders($sourceOrigin) : [];
-        $withHeaders = static fn (BrowserRelayResponse $response): BrowserRelayResponse => new BrowserRelayResponse(
+        if (isset($responseHeaders['Access-Control-Allow-Headers']) && str_contains(strtolower($headers['access-control-request-headers'] ?? ''), 'x-debugbundle-evidence'))
+            $responseHeaders['Access-Control-Allow-Headers'] .= ', x-debugbundle-evidence';
+        $withHeaders = fn (BrowserRelayResponse $response): BrowserRelayResponse => new BrowserRelayResponse(
             $response->status,
-            $response->body,
+            $discover && $response->body !== null ? [...$response->body, 'evidence_capabilities' => $this->evidence->descriptor()] : $response->body,
             array_merge($responseHeaders, $response->headers),
         );
 
@@ -146,10 +153,12 @@ final class BrowserRelayHandler
 
         $acceptedEvents = [];
         $errors = [];
+        $evidenceErrors = [];
 
         foreach (array_values($batch) as $index => $candidate) {
             if (!is_array($candidate)) {
                 $errors[] = sprintf('batch[%d]: Relay events must be objects.', $index);
+                $evidenceErrors[] = ['index' => $index, 'reason' => 'invalid_event'];
                 continue;
             }
 
@@ -157,21 +166,31 @@ final class BrowserRelayHandler
             if (!is_string($eventType) || !in_array($eventType, self::ACCEPTED_EVENT_TYPES, true)) {
                 $safeType = $eventType === 'backend_exception' ? $eventType : 'unknown';
                 $errors[] = sprintf('batch[%d]: Unsupported browser relay event type %s.', $index, $safeType);
+                $evidenceErrors[] = ['index' => $index, 'reason' => 'invalid_event'];
                 continue;
             }
 
             $sanitized = $this->sanitizeEvent($candidate);
             if ($sanitized === null) {
                 $errors[] = sprintf('batch[%d]: Invalid browser relay event payload.', $index);
+                $evidenceErrors[] = ['index' => $index, 'reason' => 'invalid_event'];
                 continue;
             }
 
-            $acceptedEvents[] = $sanitized;
+            $prepared = $this->evidence->prepare($sanitized);
+            if ($prepared !== null && $this->forwardTransport !== null && $this->projectToken !== '')
+                $prepared = RelayForwardTransport::prepareEvent($prepared, $this->projectToken);
+            if ($prepared === null) {
+                $errors[] = sprintf('batch[%d]: Unsupported diagnostic evidence.', $index);
+                $evidenceErrors[] = ['index' => $index, 'reason' => 'invalid_event'];
+                continue;
+            }
+            $acceptedEvents[] = $prepared;
         }
 
         if ($acceptedEvents !== []) {
             try {
-                if (!$this->deliverEvents($acceptedEvents)) {
+                if (!$this->deliverEvents($acceptedEvents, $discover)) {
                     return $withHeaders(new BrowserRelayResponse(500));
                 }
 
@@ -187,19 +206,9 @@ final class BrowserRelayHandler
             }
         }
 
-        if ($errors !== []) {
-            return $withHeaders(new BrowserRelayResponse(400, [
-                'accepted' => count($acceptedEvents),
-                'rejected' => count($errors),
-                'errors' => $errors,
-            ]));
-        }
-
-        return $withHeaders(new BrowserRelayResponse(202, [
-            'accepted' => count($acceptedEvents),
-            'rejected' => 0,
-            'errors' => [],
-        ]));
+        $result = ['accepted' => count($acceptedEvents), 'rejected' => count($errors), 'errors' => $errors];
+        if ($discover) $result['evidence_errors'] = $evidenceErrors;
+        return $withHeaders(new BrowserRelayResponse($discover || $errors === [] ? 202 : 400, $result));
     }
 
     /** @param array<string,string> $headers */
@@ -320,6 +329,11 @@ final class BrowserRelayHandler
             $sanitized['correlation'] = $correlation;
         }
 
+        if (is_array($event['context'] ?? null)) $sanitized['context'] = $event['context'];
+        $typed = $eventType !== 'analytics_event' && ($eventType === 'diagnostic_context'
+            || isset($payload['exception_evidence']) || isset($payload['execution']) || isset($payload['resource_observations']));
+        if ($typed && (!\DebugBundle\CanonicalEventSchema::valid($sanitized) || !EvidenceWire::optionalEvidence($sanitized)
+            || ($eventType === 'frontend_exception' && !is_array($payload['browser'] ?? null)))) return null;
         try {
             if (!TelemetryPrivacy::hasSafeEventIdentity($sanitized)) {
                 return null;
@@ -327,6 +341,7 @@ final class BrowserRelayHandler
             $protected = TelemetryPrivacy::protect([
                 'service' => $sanitized['service'],
                 'payload' => $sanitized['payload'],
+                'context' => $sanitized['context'] ?? null,
             ]);
             if (!is_array($protected) || !is_array($protected['service'] ?? null)
                 || !is_array($protected['payload'] ?? null)
@@ -336,9 +351,19 @@ final class BrowserRelayHandler
             }
             $sanitized['service'] = $protected['service'];
             $sanitized['payload'] = $protected['payload'];
+            if (isset($sanitized['context'])) {
+                if (!is_array($protected['context'])) return null;
+                $sanitized['context'] = $protected['context'];
+            }
+            if ($typed && !\DebugBundle\CanonicalEventSchema::valid($sanitized)) return null;
+            if (!EvidenceWire::optionalEvidence($sanitized)) {
+                $reduced = EvidenceWire::withoutOptional($sanitized);
+                return $reduced === null ? null : $this->sanitizeEvent($reduced);
+            }
             return $sanitized;
         } catch (\Throwable) {
-            return null;
+            $reduced = EvidenceWire::withoutOptional($sanitized);
+            return $reduced === null ? null : $this->sanitizeEvent($reduced);
         }
     }
 
@@ -395,7 +420,7 @@ final class BrowserRelayHandler
     }
 
     /** @param list<array<string, mixed>> $acceptedEvents */
-    private function deliverEvents(array $acceptedEvents): bool
+    private function deliverEvents(array $acceptedEvents, bool $discover = false): bool
     {
         if ($this->projectMode === null) {
             return true;
@@ -427,28 +452,28 @@ final class BrowserRelayHandler
                 return false;
             }
 
-            [$configured, $succeeded] = $this->forwardConnectedEvents($acceptedEvents);
-            if ($succeeded && $spoolWriteResult->writtenFilePath !== null) {
+            [$configured, $_succeeded, $complete] = $this->forwardConnectedEvents($acceptedEvents, $discover);
+            if ($complete && $spoolWriteResult->writtenFilePath !== null) {
                 RelayFileTransport::markDelivered($spoolWriteResult->writtenFilePath);
             }
 
             return $configured || $spoolWriteResult->writtenFilePath !== null;
         }
 
-        [$configured, $succeeded] = $this->forwardConnectedEvents($acceptedEvents);
+        [$configured, $succeeded] = $this->forwardConnectedEvents($acceptedEvents, $discover);
         return $configured && $succeeded;
     }
 
     /**
      * @param list<array<string, mixed>> $acceptedEvents
-     * @return array{bool, bool}
+     * @return array{bool, bool, bool}
      */
-    private function forwardConnectedEvents(array $acceptedEvents): array
+    private function forwardConnectedEvents(array $acceptedEvents, bool $discover = false): array
     {
         if ($this->forwardTransport === null || $this->projectToken === '') {
-            return [false, false];
+            return [false, false, false];
         }
 
-        return $this->forwardTransport->send($this->projectToken, $acceptedEvents);
+        return $this->forwardTransport->sendVerified($this->projectToken, $acceptedEvents, $discover);
     }
 }

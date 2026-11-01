@@ -7,10 +7,22 @@ SMOKE_DIST_DIR := smoke/dist
 SMOKE_ARTIFACT := $(SMOKE_DIST_DIR)/debugbundle-sdk-php-smoke.zip
 COMPOSER_IMAGE ?= composer:2
 DOCKER_RUN = docker run --rm -v "$(CURDIR):/app" -w /app $(COMPOSER_IMAGE)
+PHP_RUNTIME_IMAGE ?= php:8.2-cli
 
-.PHONY: test-docker check-docker
+.PHONY: evidence-runtime-docker
+evidence-runtime-docker:
+	docker run --rm -v "$(CURDIR):/app:ro" -w /app $(PHP_RUNTIME_IMAGE) php smoke/run_evidence_runtime_smoke.php
+
+.PHONY: evidence-performance
+evidence-performance:
+	docker run --rm --network none -v "$(CURDIR):/app:ro" -w /app $(PHP_RUNTIME_IMAGE) php perf/evidence_capture.php
+
+.PHONY: test-docker check-docker typecheck-docker
 test-docker:
 	$(DOCKER_RUN) composer test -- $(TEST_ARGS)
+
+typecheck-docker:
+	$(DOCKER_RUN) composer typecheck
 
 check-docker:
 	$(DOCKER_RUN) sh -c 'composer validate --strict && composer test && composer typecheck'

@@ -12,6 +12,22 @@ use PHPUnit\Framework\TestCase;
 
 final class RelayTransportTest extends TestCase
 {
+    public function testMarkerNeverFollowsLinksOrTruncatesExistingFiles(): void
+    {
+        $batch = tempnam(sys_get_temp_dir(), 'debugbundle-marker-'); self::assertNotFalse($batch);
+        $foreign = tempnam(sys_get_temp_dir(), 'debugbundle-marker-target-'); self::assertNotFalse($foreign);
+        $marker = $batch . '.delivered';
+        try {
+            file_put_contents($foreign, 'retained application content');
+            symlink($foreign, $marker);
+            RelayFileTransport::markDelivered($batch);
+            self::assertSame('retained application content', file_get_contents($foreign));
+            unlink($marker);
+            file_put_contents($marker, 'retained marker content');
+            RelayFileTransport::markDelivered($batch);
+            self::assertSame('retained marker content', file_get_contents($marker));
+        } finally { @unlink($marker); unlink($foreign); unlink($batch); }
+    }
     public function testRelayFileTransportReturnsAcceptedForEmptyBatch(): void
     {
         $transport = new RelayFileTransport(sys_get_temp_dir() . '/debugbundle-php-empty-' . bin2hex(random_bytes(4)), 'checkout api');

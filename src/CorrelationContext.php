@@ -20,6 +20,7 @@ final class CorrelationContext
         }
 
         $headers = isset($request['headers']) && is_array($request['headers']) ? $request['headers'] : [];
+        if (count($headers) > 256) return [];
         $correlation = [];
 
         $traceId = self::extractHeaderValue($headers, self::TRACE_ID_HEADER);
@@ -38,21 +39,21 @@ final class CorrelationContext
         return $correlation;
     }
 
-    /** @param array<string, mixed> $headers */
+    /** @param array<array-key, mixed> $headers */
     private static function extractHeaderValue(array $headers, string $headerName): ?string
     {
         foreach ($headers as $candidateKey => $value) {
-            if (strtolower($candidateKey) !== $headerName) {
+            if (!is_string($candidateKey) || strlen($candidateKey) > 128 || strtolower($candidateKey) !== $headerName) {
                 continue;
             }
 
-            if (is_string($value) && $value !== '') {
+            if (self::safeValue($value)) {
                 return $value;
             }
 
-            if (is_array($value)) {
+            if (is_array($value) && count($value) <= 16) {
                 foreach ($value as $entry) {
-                    if (is_string($entry) && $entry !== '') {
+                    if (self::safeValue($entry)) {
                         return $entry;
                     }
                 }
@@ -60,5 +61,13 @@ final class CorrelationContext
         }
 
         return null;
+    }
+
+    /** @phpstan-assert-if-true non-empty-string $value */
+    private static function safeValue(mixed $value): bool
+    {
+        if (!is_string($value) || $value === '' || strlen($value) > 512) return false;
+        try { return TelemetryPrivacy::protect($value) === $value; }
+        catch (\Throwable) { return false; }
     }
 }

@@ -41,6 +41,9 @@ jobs:
       - name: PHPStan
         run: composer typecheck
 
+      - name: Native evidence and real fatal runtime smoke
+        run: php smoke/run_evidence_runtime_smoke.php
+
       - name: App-driven smoke
         run: make smoke
 

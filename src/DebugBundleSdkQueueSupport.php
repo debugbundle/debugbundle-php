@@ -71,6 +71,7 @@ trait DebugBundleSdkQueueSupport
                 return false;
             }
             $removed = array_splice($this->buffer, $eviction, 1)[0];
+            $this->releaseDiagnostic($removed);
             $this->bufferBytes -= strlen(json_encode($removed, JSON_THROW_ON_ERROR));
             $this->bufferPriorities[$this->eventPriorityForEnvelope($removed)]--;
             $this->recordEventPressure($removed);
@@ -147,16 +148,20 @@ trait DebugBundleSdkQueueSupport
     /** @param list<array<string, mixed>> $events */
     private function replaceBufferedEvents(array $events): void
     {
+        $previous = $this->buffer;
         $this->buffer = [];
         $this->bufferBytes = 0;
         $this->bufferPriorities = [0, 0, 0, 0];
+        $retained = [];
         foreach ($events as $event) {
-            $this->admitProtectedEvent($event);
+            if ($this->admitProtectedEvent($event) && ($event['event_type'] ?? null) === 'diagnostic_context' && is_string($event['event_id'] ?? null)) $retained[$event['event_id']] = true;
         }
+        foreach ($previous as $event) if (($event['event_type'] ?? null) === 'diagnostic_context' && is_string($event['event_id'] ?? null) && !isset($retained[$event['event_id']])) $this->releaseDiagnostic($event);
     }
 
     private function appendPressureAggregates(): void
     {
+        $generation = $this->generation;
         foreach ($this->pressureDrops as $kind => $state) {
             if ($state['count'] <= 0 || count($this->buffer) >= self::MAX_BUFFER_EVENTS) {
                 continue;
@@ -170,8 +175,9 @@ trait DebugBundleSdkQueueSupport
                 'reason' => 'queue_pressure',
                 'level' => $kind,
             ]));
-            if ($event !== null && $this->admitProtectedEvent($event, false)) {
-                unset($this->pressureDrops[$kind]);
+            if ($generation !== $this->generation) return;
+            if ($event !== null) {
+                if ($this->enqueueEvent($event, false)) unset($this->pressureDrops[$kind]);
             }
         }
     }
@@ -183,8 +189,12 @@ trait DebugBundleSdkQueueSupport
             return;
         }
         $this->requestEndAttempted = true;
+        $generation = $this->generation;
+        $this->finalizeEvidenceBuffer();
         $this->appendSuppressionAggregates();
+        if ($generation !== $this->generation) return;
         $this->appendPressureAggregates();
+        if ($generation !== $this->generation) return;
 
         $limit = min($this->batchSize, self::REQUEST_END_MAX_EVENTS);
         [$selected, $dropped] = $this->selectRequestEndEvents($this->buffer, $limit);
@@ -200,6 +210,7 @@ trait DebugBundleSdkQueueSupport
         }
         $this->replaceBufferedEvents($selected);
         $this->appendPressureAggregates();
+        if ($generation !== $this->generation) return;
         [$final] = $this->selectRequestEndEvents($this->buffer, $limit);
         $this->replaceBufferedEvents($final);
         $this->flush();
@@ -215,20 +226,20 @@ trait DebugBundleSdkQueueSupport
             $this->eventPriorityForEnvelope($right) <=> $this->eventPriorityForEnvelope($left));
         $selected = [];
         $dropped = [];
-        $selectedBytes = 0;
+        $selectedBytes = 12; // {"events":[]}
         foreach ($events as $event) {
             try {
-                $bytes = strlen(json_encode($event, JSON_THROW_ON_ERROR));
+                $bytes = IngestionWire::bytes($event);
             } catch (\Throwable) {
                 $dropped[] = $event;
                 continue;
             }
-            if (count($selected) >= $limit || $selectedBytes + $bytes > self::REQUEST_END_MAX_BYTES) {
+            if (count($selected) >= $limit || $selectedBytes + $bytes + (count($selected) > 0 ? 1 : 0) > self::REQUEST_END_MAX_BYTES) {
                 $dropped[] = $event;
                 continue;
             }
+            $selectedBytes += $bytes + (count($selected) > 0 ? 1 : 0);
             $selected[] = $event;
-            $selectedBytes += $bytes;
         }
         return [$selected, $dropped];
     }

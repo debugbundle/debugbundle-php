@@ -11,6 +11,83 @@ use PHPUnit\Framework\TestCase;
 
 final class HttpTransportTest extends TestCase
 {
+    public function testNativeSenderBoundsFinalBodiesWithoutLosingPrimariesOrRepeatingHooks(): void
+    {
+        $capture = tempnam(sys_get_temp_dir(), 'debugbundle-wire-http-'); self::assertNotFalse($capture);
+        $sdk = null;
+        try {
+            $port = $this->startRouterServer();
+            $endpoint = sprintf('http://127.0.0.1:%d/?canonical_ack=1&capture_batches_file=%s', $port, rawurlencode($capture));
+            $sdk = new DebugBundleSdk(new HttpTransport($endpoint));
+            $hooks = 0;
+            $sdk->init(['projectToken' => 'synthetic-project', 'batchSize' => 1000,
+                'beforeSend' => static function (array $event) use (&$hooks): array {
+                    $hooks++; $event['context']['marker'] = 'accepted'; $event['payload']['attributes'] = []; return $event;
+                }]);
+            for ($i = 0; $i < 25; $i++) $sdk->captureLog(str_repeat('x', 16000) . $i, 'error');
+            $queued = (new \ReflectionProperty(DebugBundleSdk::class, 'buffer'))->getValue($sdk);
+            self::assertIsArray($queued);
+            $sdk->flush();
+            $lines = file($capture, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES); self::assertNotFalse($lines);
+            $batches = array_map(static fn (string $line): mixed => json_decode($line, true, 512, JSON_THROW_ON_ERROR), $lines);
+            self::assertGreaterThan(1, count($batches));
+            $ids = [];
+            foreach ($batches as $batch) {
+                self::assertLessThanOrEqual(262144, $batch['bytes']);
+                $wire = json_decode($batch['wire_body'], false, 512, JSON_THROW_ON_ERROR);
+                self::assertInstanceOf(\stdClass::class, $wire->events[0]->payload->attributes);
+                foreach ($batch['body']['events'] as $event) $ids[] = $event['event_id'];
+            }
+            self::assertSame(array_column($queued, 'event_id'), $ids);
+            self::assertSame(25, $hooks);
+            self::assertSame([], (new \ReflectionProperty(DebugBundleSdk::class, 'buffer'))->getValue($sdk));
+        } finally { $sdk?->reset(); unlink($capture); }
+    }
+
+    public function testEvidenceOptInUsesTheSamePostAndIsNotSerializedIntoEvents(): void
+    {
+        $capture = tempnam(sys_get_temp_dir(), 'debugbundle-evidence-http-'); self::assertNotFalse($capture);
+        try {
+            $port = $this->startRouterServer();
+            $transport = new HttpTransport(sprintf('http://127.0.0.1:%d/?capture_file=%s&debugbundle_evidence=0', $port, rawurlencode($capture)));
+            $transport->send(['project_token' => 'synthetic-project', 'events' => [], 'evidence_discovery' => true]);
+            $recorded = json_decode((string) file_get_contents($capture), true, 512, JSON_THROW_ON_ERROR);
+            self::assertStringContainsString('&debugbundle_evidence=1', $recorded['uri']);
+            self::assertSame(['events' => []], $recorded['body']);
+        } finally { unlink($capture); }
+    }
+    public function testCapabilityFeaturesMustBeAnActualJsonArray(): void
+    {
+        $port = $this->startRouterServer();
+        $body = '{"accepted":0,"rejected":0,"errors":[],"evidence_capabilities":{"version":1,"features":{"0":"recovery_v1"}}}';
+        $response = (new HttpTransport(sprintf('http://127.0.0.1:%d/?response_body=%s', $port, rawurlencode($body))))->send(['events' => []]);
+        self::assertIsArray($response->body);
+        self::assertNull($response->body['evidence_capabilities']);
+    }
+    public function testSlowStreamingBodyCannotRenewTheDeliveryDeadline(): void
+    {
+        $port = $this->startRouterServer();
+        $started = microtime(true);
+        $response = (new HttpTransport(sprintf('http://127.0.0.1:%d/?body_chunk_delay_ms=50', $port)))->send(['events' => []]);
+        self::assertLessThan(0.65, microtime(true) - $started);
+        self::assertNull($response->body);
+    }
+    public function testChunkedAcknowledgementIsReadCompletely(): void
+    {
+        $port = $this->startRouterServer();
+        $response = (new HttpTransport(sprintf('http://127.0.0.1:%d/?chunked_ack=1', $port)))->send(['events' => []]);
+        self::assertSame(202, $response->statusCode);
+        self::assertSame(['accepted' => 0, 'rejected' => 0, 'errors' => []], $response->body);
+    }
+    public function testSlowChunkedAcknowledgementCannotRenewTheDeadline(): void
+    {
+        $port = $this->startRouterServer();
+        $started = microtime(true);
+        $response = (new HttpTransport(sprintf('http://127.0.0.1:%d/?chunked_ack=1&chunk_delay_ms=50', $port)))->send(['events' => []]);
+        self::assertSame(202, $response->statusCode, 'The response headers were received before the body deadline');
+        self::assertNull($response->body);
+        self::assertLessThan(0.65, microtime(true) - $started);
+    }
     public function testBuiltInHttpRetainsUnacknowledgedBatchAndRecovers(): void
     {
         $port = $this->startRouterServer();

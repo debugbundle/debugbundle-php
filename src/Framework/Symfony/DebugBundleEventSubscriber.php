@@ -47,7 +47,7 @@ final class DebugBundleEventSubscriber implements EventSubscriberInterface
 
         $request = $event->getRequest();
         $request->attributes->set(self::START_TIME_ATTRIBUTE, $this->now());
-        $this->sdk->beginRequest($this->normalizeRequest($request));
+        $this->sdk->beginRequest($this->normalizeRequest($request), $request);
     }
 
     public function onKernelResponse(ResponseEvent $event): void
@@ -67,7 +67,7 @@ final class DebugBundleEventSubscriber implements EventSubscriberInterface
                 'duration_ms' => (int) round(($this->now() - $startedAtValue) * 1000),
             ]
         );
-        $this->sdk->endRequest();
+        $this->sdk->endRequest($request);
     }
 
     public function onKernelException(ExceptionEvent $event): void
@@ -79,7 +79,7 @@ final class DebugBundleEventSubscriber implements EventSubscriberInterface
         $this->sdk->captureException($event->getThrowable(), [
             'request' => $this->normalizeRequest($event->getRequest()),
         ]);
-        $this->sdk->endRequest();
+        $this->sdk->endRequest($event->getRequest());
     }
 
     /** @return array<string, mixed> */

@@ -30,8 +30,7 @@ def param(name: str, value: str) -> bytes:
     return bytes([len(name_bytes), len(value_bytes)]) + name_bytes + value_bytes
 
 
-def main() -> None:
-    port = int(sys.argv[1])
+def capture(port: int, evidence: bool) -> None:
     deadline = time.monotonic() + 10
     while True:
         try:
@@ -50,7 +49,7 @@ def main() -> None:
                 "SCRIPT_FILENAME": "/app/smoke/fpm_request.php",
                 "REQUEST_METHOD": "GET",
                 "SERVER_PROTOCOL": "HTTP/1.1",
-                "QUERY_STRING": "",
+                "QUERY_STRING": "evidence=1" if evidence else "",
             }.items()
         )
         started = time.monotonic()
@@ -81,7 +80,7 @@ def main() -> None:
     if not separator:
         raise RuntimeError("Missing FastCGI response headers")
     result = json.loads(body)
-    if result != {
+    expected = {
         "inline_calls": 0,
         "request_end_calls": 1,
         "event_types": ["backend_exception", "error_suppressed"],
@@ -93,11 +92,24 @@ def main() -> None:
             "query": {},
         },
         "suppressed_count": 30,
-    }:
+    }
+    if evidence:
+        expected.update({
+            "exception_evidence_origin": "runtime_reported",
+            "execution_kind": "request",
+            "execution_name": "/synthetic/{id}",
+        })
+    if result != expected:
         raise RuntimeError(f"Unexpected FPM capture result: {result}")
     if elapsed >= 1.5:
         raise RuntimeError(f"FPM request exceeded 1.5-second smoke budget: {elapsed:.3f}s")
-    print(f"PHP-FPM request-end smoke passed in {elapsed:.3f}s")
+    print(f"PHP-FPM request-end smoke passed (evidence={evidence}) in {elapsed:.3f}s")
+
+
+def main() -> None:
+    port = int(sys.argv[1])
+    capture(port, False)
+    capture(port, True)
 
 
 if __name__ == "__main__":

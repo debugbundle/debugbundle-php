@@ -67,7 +67,13 @@ final class RelayFileTransport
     public static function markDelivered(string $writtenFilePath): void
     {
         try {
-            file_put_contents($writtenFilePath . '.delivered', '');
+            $stat = @lstat($writtenFilePath);
+            if ($stat === false || ($stat['mode'] & 0170000) !== 0100000) return;
+            $marker = $writtenFilePath . '.delivered';
+            $handle = @fopen($marker, 'xb');
+            if ($handle === false) return;
+            try { chmod($marker, self::LOCAL_EVENT_FILE_MODE); }
+            finally { fclose($handle); }
         } catch (\Throwable) {
             return;
         }

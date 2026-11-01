@@ -17,6 +17,25 @@ final class SchemaValidationTest extends TestCase
 {
     private ?DebugBundleSdk $sdk = null;
 
+    public function testEnrichedFailureExecutionAndStandaloneRecoveryValidateAgainstTheAcceptingContract(): void
+    {
+        $transport = new FakeTransport(); $sdk = $this->sdk = new DebugBundleSdk($transport);
+        $sdk->init(['projectToken' => 'synthetic-project', 'captureRecoveryObservations' => true,
+            'evidenceCapabilities' => ['version' => 1, 'features' => ['exception_evidence_v1', 'recovery_v1']]]);
+        $sdk->runWithOperationContext(['kind' => 'job', 'name' => 'synthetic.consume'], static function () use ($sdk): void {
+            $ref = '00000000-0000-4000-8000-000000000001';
+            $sdk->captureException(new \RuntimeException('outer', 0, new \Exception('inner')), ['failureRef' => $ref]);
+            $sdk->captureRecovery(['failureRef' => $ref, 'attemptId' => '00000000-0000-4000-8000-000000000002', 'state' => 'recovery_observed']);
+        });
+        $sdk->flush(); self::assertCount(2, $transport->calls[0]['events']);
+        $schema = json_decode((string) file_get_contents(__DIR__ . '/fixtures/event-envelope.schema.json'));
+        foreach ($transport->calls[0]['events'] as $event) {
+            $validation = (new Validator())->validate(json_decode(json_encode($event, JSON_THROW_ON_ERROR)), $schema);
+            $error = $validation->error();
+            self::assertTrue($validation->isValid(), $error === null ? '' : (string) json_encode((new ErrorFormatter())->format($error)));
+        }
+    }
+
     protected function tearDown(): void
     {
         $this->sdk?->reset();

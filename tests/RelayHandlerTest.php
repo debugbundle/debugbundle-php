@@ -419,7 +419,7 @@ final class RelayHandlerTest extends TestCase
             public function send(array $request): TransportResponse
             {
                 $this->calls[] = $request;
-                return new TransportResponse(202, null);
+                return new TransportResponse(202, null, ['accepted' => count($request['events']), 'rejected' => 0, 'errors' => []]);
             }
         };
 

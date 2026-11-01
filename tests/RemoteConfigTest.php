@@ -47,7 +47,7 @@ final class RemoteConfigTest extends TestCase
         $sdk->refreshRemoteConfig(true);
 
         self::assertCount(1, $fetcher->calls);
-        self::assertSame('https://api.debugbundle.com/v1/sdk/config', $fetcher->calls[0]['url']);
+        self::assertSame('https://api.debugbundle.com/v1/sdk/config?debugbundle_evidence=1', $fetcher->calls[0]['url']);
         self::assertSame('GET', $fetcher->calls[0]['request']['method']);
         self::assertSame('Bearer dbundle_proj_test', $fetcher->calls[0]['request']['headers']['authorization']);
     }
@@ -76,7 +76,7 @@ final class RemoteConfigTest extends TestCase
         $sdk->refreshRemoteConfig(true);
 
         self::assertCount(1, $fetcher->calls);
-        self::assertSame('http://self-hosted.test:3001/api/v1/sdk/config', $fetcher->calls[0]['url']);
+        self::assertSame('http://self-hosted.test:3001/api/v1/sdk/config?debugbundle_evidence=1', $fetcher->calls[0]['url']);
         self::assertSame('GET', $fetcher->calls[0]['request']['method']);
     }
 

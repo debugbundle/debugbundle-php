@@ -27,7 +27,7 @@ final class DebugBundleMiddleware
     {
         $startedAt = $this->now();
         $normalizedRequest = $this->normalizeRequest($request);
-        $this->sdk->beginRequest($normalizedRequest);
+        $this->sdk->beginRequest($normalizedRequest, $request);
 
         try {
             $response = $next($request);
@@ -38,7 +38,7 @@ final class DebugBundleMiddleware
             throw $error;
         } finally {
             if (!isset($response) || !$response instanceof Response) {
-                $this->sdk->endRequest();
+                $this->sdk->endRequest($request);
             }
         }
 
@@ -52,7 +52,7 @@ final class DebugBundleMiddleware
             );
         }
 
-        $this->sdk->endRequest();
+        $this->sdk->endRequest($request);
 
         return $response;
     }

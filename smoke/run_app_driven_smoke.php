@@ -48,6 +48,8 @@ function main(array $argv): void
 
         $requests = readCapturedRequests($captureFile);
         validateCapturedRequests($requests, $schemaPath, (string) $options['version']);
+        $installedSdk = dirname((new ReflectionClass(\DebugBundle\DebugBundleSdk::class))->getFileName(), 2);
+        runCommand([PHP_BINARY, $installedSdk . '/smoke/run_evidence_runtime_smoke.php', $projectDir . '/vendor/autoload.php'], $projectDir);
 
         echo "PHP app-driven smoke passed.\n";
     } finally {

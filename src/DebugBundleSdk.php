@@ -16,9 +16,12 @@ final class DebugBundleSdk
     use DebugBundleSdkEventSupport;
     use DebugBundleSdkPolicySupport;
     use DebugBundleSdkQueueSupport;
+    use DebugBundleSdkExceptionCapture;
+    use DebugBundleSdkEvidenceSupport;
+    use DebugBundleSdkEventBoundary;
 
     private const SDK_NAME = 'debugbundle/sdk-php';
-    private const SDK_VERSION = '2.0.2';
+    private const SDK_VERSION = '2.1.0';
     private const SCHEMA_VERSION = '2026-03-01';
     private const DEFAULT_ENDPOINT = 'https://api.debugbundle.com/v1/events';
     private const DEFAULT_BATCH_SIZE = 25;
@@ -36,6 +39,7 @@ final class DebugBundleSdk
     private ?TransportInterface $transportOverride;
     private ?TransportInterface $transport = null;
     private bool $enabled = false;
+    private int $generation = 0;
     private string $projectToken = '';
     private string $service = 'php-service';
     private string $environment = 'development';
@@ -78,11 +82,7 @@ final class DebugBundleSdk
     /** @var array<string, list<array<string, mixed>>> */
     private array $probeBuffers = [];
 
-    /** @var list<RemoteProbeDirective> */
-    private array $requestTriggerDirectives = [];
-
-    /** @var array<string, string> */
-    private array $requestCorrelation = [];
+    private OperationContext $operations;
 
     /** @var list<array{logger: Logger, handler: DebugBundleHandler}> */
     private array $loggerBindings = [];
@@ -103,6 +103,7 @@ final class DebugBundleSdk
         $this->redactFields = $this->buildRedactFields(null);
         $this->capturePolicy = RemoteConfig::balancedCapturePolicy();
         $this->processStartedAtNs = hrtime(true);
+        $this->operations = new OperationContext();
     }
 
     /** @param array<string, mixed> $config */
@@ -128,8 +129,6 @@ final class DebugBundleSdk
         $this->pressureDrops = [];
         $this->context = [];
         $this->probeBuffers = [];
-        $this->requestTriggerDirectives = [];
-        $this->requestCorrelation = [];
         $this->retryAfter = 0.0;
         $this->lastEventAt = null;
         $this->consecutiveFailures = 0;
@@ -155,6 +154,7 @@ final class DebugBundleSdk
             $this->transport = new HttpTransport($this->endpoint);
         }
 
+        $this->initializeEvidence($config);
         $this->attachLoggerIntegration($config['logger'] ?? null);
 
         $this->captureErrors();
@@ -197,13 +197,7 @@ final class DebugBundleSdk
         ];
 
         $event = $this->applyBeforeSend($this->baseEvent('log_event', $payload, $context ?? []));
-        if (
-            $event === null
-            || !$this->levelEnabled(
-                $this->normalizeLevel((string) ($event['payload']['level'] ?? 'warning')),
-                $this->effectiveLogThreshold()
-            )
-        ) {
+        if ($event === null) {
             return;
         }
 
@@ -237,10 +231,7 @@ final class DebugBundleSdk
         ];
 
         $event = $this->applyBeforeSend($this->baseEvent('request_event', $payload, $redactedContext));
-        if ($event === null || !$this->shouldCaptureRequestEvent(
-            (array) ($event['payload'] ?? []),
-            ['status_code' => $event['payload']['response_status'] ?? null]
-        )) {
+        if ($event === null) {
             return;
         }
 
@@ -272,6 +263,7 @@ final class DebugBundleSdk
             return;
         }
 
+        $generation = $this->generation;
         $matchingDirectives = $this->findMatchingProbeDirectives($label);
         $isHeavy = ($opts['heavy'] ?? false) === true;
         if ($isHeavy && $matchingDirectives === []) {
@@ -287,6 +279,7 @@ final class DebugBundleSdk
         } catch (\Throwable) {
             return;
         }
+        if ($generation !== $this->generation) return;
         if (!is_array($value) || array_is_list($value)) {
             $value = ['value' => $value];
         }
@@ -329,6 +322,7 @@ final class DebugBundleSdk
             return;
         }
 
+        $generation = $this->generation;
         $request = [
             'method' => 'GET',
             'headers' => ['authorization' => 'Bearer ' . $this->projectToken],
@@ -340,8 +334,9 @@ final class DebugBundleSdk
         $fetcher = $this->configFetcher;
 
         try {
-            $response = $fetcher($this->configEndpoint(), $request);
+            $response = $fetcher(EvidenceWire::discoveryUrl($this->configEndpoint()), $request);
         } catch (\Throwable) {
+            if ($generation !== $this->generation) return;
             if ($initial) {
                 $this->capturePolicy = RemoteConfig::minimalCapturePolicy();
                 $this->remoteConfigSnapshot = null;
@@ -349,7 +344,9 @@ final class DebugBundleSdk
             }
             return;
         }
+        if ($generation !== $this->generation) return;
 
+        try {
         $statusCode = isset($response->statusCode) && is_int($response->statusCode)
             ? $response->statusCode
             : null;
@@ -357,7 +354,9 @@ final class DebugBundleSdk
             return;
         }
         $configPayload = $this->extractConfigPayload($response);
+        if ($generation !== $this->generation) return;
         if ($statusCode !== 200 || $configPayload === null) {
+            $this->observeEvidence(null, true);
             if ($initial) {
                 $this->capturePolicy = RemoteConfig::minimalCapturePolicy();
                 $this->remoteConfigSnapshot = null;
@@ -368,6 +367,7 @@ final class DebugBundleSdk
 
         $headers = isset($response->headers) && is_array($response->headers) ? $response->headers : [];
         $snapshot = RemoteConfig::parseRemoteConfig($configPayload, $this->configuredProbesPollIntervalMs, (int) round($this->now() * 1000));
+        $this->observeEvidence($configPayload, true, $snapshot !== null);
         if ($snapshot === null) {
             if ($initial) {
                 $this->capturePolicy = RemoteConfig::minimalCapturePolicy();
@@ -382,24 +382,39 @@ final class DebugBundleSdk
         $this->probesEnabled = $snapshot->probesEnabled;
         $etag = $headers['etag'] ?? null;
         $this->remoteConfigEtag = is_string($etag) && $etag !== '' ? $etag : $this->remoteConfigEtag;
+        } catch (\Throwable) {
+            if ($generation !== $this->generation) return;
+            $this->observeEvidence(null, true);
+            if ($initial) { $this->capturePolicy = RemoteConfig::minimalCapturePolicy(); $this->remoteConfigSnapshot = null; }
+        }
     }
 
     /** @param array<string, mixed> $request */
-    public function beginRequest(array $request): void
+    public function beginRequest(array $request, ?object $owner = null): void
     {
         $triggerTokenKey = $this->remoteConfigSnapshot?->triggerTokenKey;
-        $this->requestCorrelation = CorrelationContext::resolveRequestCorrelation($request);
-        $this->requestTriggerDirectives = TriggerToken::resolveRequestTriggerDirectives(
+        $correlation = CorrelationContext::resolveRequestCorrelation($request);
+        $directives = TriggerToken::resolveRequestTriggerDirectives(
             $request,
             $triggerTokenKey,
             (int) round($this->now() * 1000),
         );
+        $this->operations->begin(['kind' => 'request', 'name' => $request['route_template'] ?? null], $correlation, $directives, $owner);
     }
 
-    public function endRequest(): void
+    public function endRequest(?object $owner = null): void
     {
-        $this->requestCorrelation = [];
-        $this->requestTriggerDirectives = [];
+        $this->operations->end($owner);
+    }
+
+    /** @template Result
+     * @param array<string, mixed> $options
+     * @param callable(): Result $callback
+     * @return Result
+     */
+    public function runWithOperationContext(array $options, callable $callback): mixed
+    {
+        return $this->operations->run($options, $callback);
     }
 
     /** @return array<string, mixed>|null */
@@ -436,54 +451,84 @@ final class DebugBundleSdk
         return $this->lastEventAt;
     }
 
+    private bool $flushing = false;
+
     public function flush(): void
     {
+        if ($this->flushing) return;
+        $this->flushing = true;
+        $generation = $this->generation;
+        $deadline = hrtime(true) + 250_000_000;
+        try {
+            // One shared native deadline bounds the whole flush, including byte
+            // chunks. Request-end selection already fits one bounded request.
+            for ($cycle = 0; $cycle <= self::MAX_BUFFER_EVENTS; $cycle++) {
+                if (!$this->flushBufferedBatch($deadline) || $generation !== $this->generation
+                    || !$this->transport instanceof HttpTransport || $this->buffer === []
+                    || hrtime(true) >= $deadline) return;
+            }
+        } catch (\Throwable) {
+            // SDK failure cannot propagate into the host or release pending data.
+        } finally { $this->flushing = false; }
+    }
+
+    private function flushBufferedBatch(int $deadline): bool
+    {
         if (!$this->enabled || $this->transport === null) {
-            return;
+            return false;
         }
 
+        $generation = $this->generation;
+        $this->finalizeEvidenceBuffer();
         $this->appendSuppressionAggregates();
+        if ($generation !== $this->generation) return false;
         $this->appendPressureAggregates();
+        if ($generation !== $this->generation) return false;
         if ($this->buffer === []) {
-            return;
+            return false;
         }
 
         $now = $this->now();
         if ($now < $this->retryAfter) {
-            return;
+            return false;
         }
 
         $transport = $this->transport;
         if ($transport === null) {
-            return;
+            return false;
         }
 
-        $batch = $this->buffer;
+        $batch = $transport instanceof HttpTransport ? IngestionWire::prefix($this->buffer) : $this->buffer;
         $response = null;
         try {
-            $response = $transport->send([
+            $request = [
                 'project_token' => $this->projectToken,
                 'events' => $batch,
-            ]);
+            ];
+            if ($transport instanceof HttpTransport) $request['evidence_discovery'] = true;
+            $response = $transport instanceof HttpTransport ? $transport->sendUntil($request, $deadline) : $transport->send($request);
         } catch (\Throwable) {
+            if ($generation !== $this->generation) return false;
             $this->consecutiveFailures++;
-            return;
+            return false;
         }
+        if ($generation !== $this->generation) return false;
 
         if ($response->statusCode >= 200 && $response->statusCode < 300) {
             $acknowledgement = IngestionAcknowledgementDecision::decide($response->body, count($batch), $this->transport instanceof HttpTransport);
+            $lostEvidence = $this->observeEvidence($response->body, $transport instanceof HttpTransport, $acknowledgement->kind === 'acknowledged');
             if ($acknowledgement->kind === 'protocol_failure') {
                 $this->consecutiveFailures++;
                 $retryAfterMs = RetryAfter::bounded($response->retryAfterMs);
                 $this->retryAfter = $this->now() + ($retryAfterMs / 1000);
-                return;
+                return false;
             }
             if ($acknowledgement->kind === 'legacy') {
                 $this->replaceBufferedEvents(array_slice($this->buffer, count($batch)));
                 $this->retryAfter = 0.0;
                 $this->lastEventAt = $this->now() * 1000;
                 $this->consecutiveFailures = 0;
-                return;
+                return true;
             }
 
             $trailingEvents = array_slice($this->buffer, count($batch));
@@ -493,6 +538,11 @@ final class DebugBundleSdk
                     $retryableEvents[] = $batch[$index];
                 }
             }
+            if ($lostEvidence) foreach ($acknowledgement->terminalErrors as $error) {
+                if ($error['reason'] !== 'invalid_event' || !isset($batch[$error['index']])) continue;
+                $legacy = EvidenceWire::withoutOptional($batch[$error['index']]);
+                if ($legacy !== null) $retryableEvents[] = $legacy;
+            }
             $this->replaceBufferedEvents([...$retryableEvents, ...$trailingEvents]);
             if ($acknowledgement->accepted > 0) {
                 $this->lastEventAt = $this->now() * 1000;
@@ -501,24 +551,25 @@ final class DebugBundleSdk
                 $this->consecutiveFailures++;
                 $retryAfterMs = RetryAfter::bounded($response->retryAfterMs);
                 $this->retryAfter = $this->now() + ($retryAfterMs / 1000);
-                return;
+                return false;
             }
             $this->retryAfter = 0.0;
             $this->consecutiveFailures = $acknowledgement->accepted > 0 ? 0 : 3;
-            return;
+            return true;
         }
 
         $this->consecutiveFailures++;
         if ($response->statusCode === 429 || ($response->statusCode >= 500 && $response->retryAfterMs !== null)) {
             $retryAfterMs = RetryAfter::bounded($response->retryAfterMs);
             $this->retryAfter = $this->now() + ($retryAfterMs / 1000);
-            return;
+            return false;
         }
 
         if ($response->statusCode >= 400 && $response->statusCode < 500) {
-            $this->replaceBufferedEvents([]);
+            $this->replaceBufferedEvents(array_slice($this->buffer, count($batch)));
             $this->retryAfter = 0.0;
         }
+        return false;
     }
 
     public function captureErrors(): void
@@ -532,7 +583,7 @@ final class DebugBundleSdk
             if ((error_reporting() & $severity) === 0) {
                 return false;
             }
-            $this->captureExceptionInternal(new \ErrorException($message, 0, $severity, $file, $line), null, false);
+            $this->captureExceptionInternal(new \ErrorException($message, 0, $severity, $file, $line), null, false, true, null, true);
             return false;
         });
         $this->errorsHooked = true;
@@ -545,7 +596,7 @@ final class DebugBundleSdk
         }
 
         set_exception_handler(function (\Throwable $error): void {
-            $this->captureExceptionInternal($error, null, false);
+            $this->captureExceptionInternal($error, null, false, false);
         });
         $this->exceptionsHooked = true;
     }
@@ -564,6 +615,9 @@ final class DebugBundleSdk
 
     public function reset(): void
     {
+        $this->generation++;
+        $this->operations->clear();
+        $this->resetEvidence();
         if ($this->errorsHooked) {
             restore_error_handler();
         }
@@ -588,8 +642,6 @@ final class DebugBundleSdk
         $this->pressureDrops = [];
         $this->context = [];
         $this->probeBuffers = [];
-        $this->requestCorrelation = [];
-        $this->requestTriggerDirectives = [];
         $this->transport = $this->transportOverride;
         $this->retryAfter = 0.0;
         $this->lastEventAt = null;
@@ -605,160 +657,36 @@ final class DebugBundleSdk
         $this->capturedExceptions = new \WeakMap();
     }
 
-    /** @param array<string, mixed>|null $lastError */
-    private function handleShutdown(?array $lastError): void
-    {
-        if ($lastError !== null && in_array((int) ($lastError['type'] ?? 0), [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
-            $this->captureExceptionInternal(
-                new \ErrorException(
-                    (string) ($lastError['message'] ?? 'fatal error'),
-                    0,
-                    (int) ($lastError['type'] ?? E_ERROR),
-                    (string) ($lastError['file'] ?? ''),
-                    (int) ($lastError['line'] ?? 0),
-                ),
-                null,
-                false,
-                false
-            );
-        }
-
-        $this->flushAtRequestEnd();
-    }
-
-    /** @param array<string, mixed>|null $context */
-    private function captureExceptionInternal(
-        \Throwable $error,
-        ?array $context,
-        bool $handled,
-        bool $runBeforeSend = true
-    ): void
-    {
-        if (!$this->enabled) {
-            return;
-        }
-        if (!$this->preAdmissionAllows('backend_exception')) {
-            return;
-        }
-
-        if (isset($this->capturedExceptions[$error])) {
-            return;
-        }
-
-        $this->capturedExceptions[$error] = true;
-
-        $redactedContext = $this->redactArray($context ?? []);
-        $message = $error->getMessage();
-        $payload = [
-            'name' => $error::class,
-            'message' => $message === '' ? $error::class : $message,
-            'stack' => $this->stringifyThrowable($error),
-            'handled' => $handled,
-            'request' => $this->buildRequestPayload($redactedContext['request'] ?? null),
-            'response' => $this->buildResponsePayload($redactedContext['response'] ?? null),
-            'runtime' => $this->buildRuntimePayload(),
-        ];
-
-        if ($this->probeFlushOnError) {
-            $probeData = $this->buildProbeData();
-            if ($probeData !== null) {
-                $payload['probe_data'] = $probeData;
-            }
-        }
-
-        $event = $this->baseEvent('backend_exception', $payload, $redactedContext);
-        if ($runBeforeSend) {
-            $event = $this->applyBeforeSend($event);
-        }
-        if ($event === null || !$this->passesSampleRate()) {
-            return;
-        }
-
-        $eventPayload = is_array($event['payload'] ?? null) ? $event['payload'] : [];
-        $suppressionKey = sprintf(
-            '%s:%s:%s:%s',
-            (string) ($event['event_type'] ?? 'backend_exception'),
-            (string) ($eventPayload['name'] ?? ''),
-            (string) ($eventPayload['message'] ?? ''),
-            (string) ($eventPayload['stack'] ?? '')
-        );
-        if (!$this->suppression->shouldCapture($suppressionKey, $this->now())) {
-            return;
-        }
-
-        $this->enqueueEvent($event);
-    }
-
     /** @param array<string, mixed> $event */
-    private function enqueueEvent(array $event): void
+    private function enqueueEvent(array $event, bool $countDrop = true): bool
     {
+        $original = $event;
         $event = $this->protectEvent($event);
         if ($event === null) {
-            return;
+            $this->releaseDiagnostic($original);
+            return false;
         }
-        $this->admitProtectedEvent($event);
+        $event = $this->reconcileEvidence($event, $event);
+        if ($event === null) return false;
+        if (in_array($event['event_type'] ?? null, ['backend_exception', 'frontend_exception'], true)) {
+            $payload = $event['payload'];
+            $key = sprintf('%s:%s:%s:%s', $event['event_type'], $payload['name'] ?? '', $payload['message'] ?? '', $payload['stack'] ?? '');
+            if (!$this->suppression->shouldCapture($key, $this->now())) return false;
+        }
+        if ($this->admitProtectedEvent($event, $countDrop)) return true;
+        $this->releaseDiagnostic($event);
+        return false;
     }
 
     private function appendSuppressionAggregates(): void
     {
+        $generation = $this->generation;
         foreach ($this->suppression->drainAggregates($this->now()) as $aggregate) {
             $event = $this->applyBeforeSend(
                 $this->baseEvent((string) $aggregate['event_type'], (array) $aggregate['payload'])
             );
-            if ($event !== null) {
-                $protected = $this->protectEvent($event);
-                if ($protected !== null) {
-                    $this->admitProtectedEvent($protected);
-                }
-            }
-        }
-    }
-
-    /**
-     * @param array<string, mixed> $event
-     * @return array<string, mixed>|null
-     */
-    private function applyBeforeSend(array $event): ?array
-    {
-        $protected = $this->protectEvent($event);
-        if ($protected === null) {
-            return null;
-        }
-        $prepared = BeforeSend::apply($protected, $this->beforeSend);
-        return $prepared === null ? null : $this->protectEvent($prepared);
-    }
-
-    /** @param array<string, mixed> $event
-     *  @return array<string, mixed>|null
-     */
-    private function protectEvent(array $event): ?array
-    {
-        try {
-            if (!TelemetryPrivacy::hasSafeEventIdentity($event, $this->redactFields)) {
-                return null;
-            }
-            $fields = TelemetryPrivacy::protect([
-                'payload' => $event['payload'] ?? null,
-                'context' => $event['context'] ?? null,
-                'service' => $event['service'] ?? null,
-            ], $this->redactFields);
-            if (!is_array($fields) || !is_array($fields['payload'] ?? null)
-                || !is_array($fields['service'] ?? null)
-                || !is_string($fields['service']['name'] ?? null)
-                || !is_string($fields['service']['environment'] ?? null)) {
-                return null;
-            }
-            $event['payload'] = $fields['payload'];
-            $event['service'] = $fields['service'];
-            if (isset($event['context'])) {
-                if (!is_array($fields['context'])) {
-                    return null;
-                }
-                $event['context'] = $fields['context'];
-            }
-            return $event;
-        } catch (\Throwable) {
-            return null;
+            if ($generation !== $this->generation) return;
+            if ($event !== null) $this->enqueueEvent($event);
         }
     }
 

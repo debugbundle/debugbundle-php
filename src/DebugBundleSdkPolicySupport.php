@@ -191,7 +191,7 @@ trait DebugBundleSdkPolicySupport
     /** @return list<RemoteProbeDirective> */
     private function findMatchingProbeDirectives(string $label): array
     {
-        $directives = $this->requestTriggerDirectives;
+        $directives = $this->operations->current()->directives ?? [];
         if ($this->remoteConfigSnapshot !== null && $this->remoteConfigSnapshot->remoteProbesEnabled) {
             $directives = [...$directives, ...$this->remoteConfigSnapshot->directives];
         }

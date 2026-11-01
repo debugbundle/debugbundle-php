@@ -9,6 +9,63 @@ use PHPUnit\Framework\TestCase;
 
 final class BeforeSendTest extends TestCase
 {
+    public function testAcceptsCanonicalUuidVersionsAndRejectsMalformedEnvelopeReplacements(): void
+    {
+        $original = self::event('log_event', ['level' => 'error', 'message' => 'original', 'attributes' => []]);
+        $valid = $original; $valid['event_id'] = '00000000-0000-7000-8000-000000000001';
+        self::assertSame($valid, BeforeSend::apply($original, static fn (): array => $valid));
+        foreach ([['occurred_at' => 'tomorrow'], ['correlation' => ['trace_id' => ['unsafe']]],
+            ['project_id' => 'not-a-uuid'], ['service' => ['name' => 'test', 'environment' => 'test', 'unexpected' => true]]] as $fields) {
+            $invalid = array_replace($original, $fields);
+            self::assertSame($original, BeforeSend::apply($original, static fn (): array => $invalid));
+        }
+    }
+    public function testRejectsIncompleteNestedEnvelopeAndOwnsNativeObjectsWithoutApplicationMagic(): void
+    {
+        $original = self::event('log_event', ['level' => 'error', 'message' => 'private original', 'attributes' => []]);
+        $invalid = self::event('backend_exception', ['name' => 'Error', 'message' => 'safe', 'stack' => 'trace',
+            'handled' => true, 'request' => [], 'response' => [], 'runtime' => []]);
+        self::assertSame($original, BeforeSend::apply($original, static fn (): array => $invalid));
+        $replacement = $original;
+        $replacement['payload']['message'] = 'safe';
+        $replacement['context'] = ['nested' => (object) ['value' => 'owned']];
+        $accepted = BeforeSend::apply($original, static fn (): array => $replacement);
+        $replacement['context']['nested']->value = 'later mutation';
+        self::assertNotNull($accepted);
+        self::assertSame('owned', $accepted['context']['nested']->value);
+        $foreign = new class {
+            public static int $calls = 0;
+            public function __clone() { ++self::$calls; throw new \LogicException('must not clone'); }
+            public function __serialize(): array { ++self::$calls; throw new \LogicException('must not serialize'); }
+        };
+        $replacement['context'] = ['foreign' => $foreign];
+        self::assertSame($original, BeforeSend::apply($original, static fn (): array => $replacement));
+        self::assertSame(0, $foreign::$calls);
+    }
+
+    public function testWithholdsValidationBudgetExhaustionWithoutRestoringRemovedContent(): void
+    {
+        $original = self::event('log_event', ['level' => 'error', 'message' => 'private original', 'attributes' => []]);
+        $replacement = $original;
+        $replacement['payload']['message'] = 'safe';
+        $replacement['context'] = ['detail' => str_repeat('x', 9 * 1024 * 1024)];
+        self::assertTrue(BeforeSend::apply($original, static fn (): array => $replacement) === null);
+    }
+
+    public function testCompleteHookBoundaryMatchesAcceptingEvidenceCorpus(): void
+    {
+        /** @var array{events:list<array{id:string,valid:bool,event:array<string,mixed>}>} $corpus */
+        $corpus = json_decode((string) file_get_contents(__DIR__ . '/fixtures/evidence-wire-cases.json'), true, 512, JSON_THROW_ON_ERROR);
+        $original = self::event('log_event', ['level' => 'error', 'message' => 'safe original', 'attributes' => []]);
+        foreach ($corpus['events'] as $fixture) {
+            $candidate = $fixture['event'];
+            $candidate['sdk_version'] = 'hook-accepted';
+            $result = BeforeSend::apply($original, static fn (): array => $candidate);
+            self::assertNotNull($result);
+            self::assertSame($fixture['valid'], $result['sdk_version'] === 'hook-accepted', $fixture['id']);
+        }
+    }
+
     public function testNullHookReturnsOriginalEventWithoutMutation(): void
     {
         $event = self::event('log_event', [
@@ -28,10 +85,10 @@ final class BeforeSendTest extends TestCase
                 'message' => 'checkout failed',
                 'stack' => 'trace',
                 'handled' => true,
-                'request' => [],
-                'response' => [],
-                'runtime' => [],
-                'probe_data' => [],
+                'request' => ['method' => 'GET', 'path' => '/', 'query' => [], 'headers' => []],
+                'response' => ['status_code' => 500],
+                'runtime' => ['version' => '8.2'],
+                'probe_data' => ['version' => 1, 'items' => []],
             ]),
             self::event('request_event', [
                 'method' => 'GET',
@@ -48,15 +105,16 @@ final class BeforeSendTest extends TestCase
                 'attributes' => [],
             ]),
             self::event('frontend_breadcrumb', [
-                'breadcrumb_type' => 'navigation',
+                'breadcrumb_type' => 'route_change',
                 'data' => [],
             ]),
             self::event('frontend_exception', [
                 'name' => 'TypeError',
                 'message' => 'render failed',
                 'stack' => 'trace',
+                'browser' => ['name' => 'unknown', 'version' => 'unknown'],
                 'breadcrumbs' => [],
-                'probe_data' => [],
+                'probe_data' => ['version' => 1, 'items' => []],
             ]),
             self::event('deploy_metadata', [
                 'commit_sha' => 'abc123',
