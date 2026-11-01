@@ -18,9 +18,9 @@ Use this package to capture PHP backend exceptions, request metadata, Monolog re
 
 Requires PHP 8.2 or newer.
 
-## Evidence candidate (unreleased)
+## Evidence in 2.1.0
 
-The unreleased 2.1.0 worktree candidate adds bounded native previous-exception graphs and structured
+Version 2.1.0 adds bounded native previous-exception graphs and structured
 locations while retaining the original redacted error fields. Normal additional
 exception evidence is limited to 32 KiB; fatal evidence uses at most two nodes,
 eight frames per node and 4 KiB including operation metadata. Arguments and object

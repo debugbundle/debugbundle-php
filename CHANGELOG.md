@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-01
+
 - Read native chunked HTTP acknowledgements without casting PHP's decoding stream to a socket; retain the same response byte cap and whole-response deadline.
 - Validate complete hook envelopes with the vendored accepting schema; own native
   JSON without application serializers/clone handlers and revalidate privacy
@@ -20,7 +22,7 @@
   intersection, legacy response compatibility and original-error-only downgrade.
 - Bound native HTTP response bodies and their read deadline; guard hook/probe
   reentrancy and destination changes without invoking custom error formatters.
-- Qualify the candidate with canonical wire schemas, real PHP 8.2/8.5 engine
+- Qualify the release with canonical wire schemas, real PHP 8.2/8.5 engine
   fatals, installed-package smoke checks and legacy/enriched PHP-FPM paths.
 
 ## [2.0.2] - 2026-10-20
