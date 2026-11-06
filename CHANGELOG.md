@@ -1,5 +1,7 @@
 # Changelog
 
+## [Unreleased]
+
 ## [2.1.1] - 2026-11-06
 
 - Final audit: release exception identity after rejected hooks, sampling or queue admission while keeping the recursive-hook guard.
