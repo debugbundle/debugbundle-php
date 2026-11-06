@@ -21,7 +21,7 @@ final class DebugBundleSdk
     use DebugBundleSdkEventBoundary;
 
     private const SDK_NAME = 'debugbundle/sdk-php';
-    private const SDK_VERSION = '2.1.0';
+    private const SDK_VERSION = '2.1.1';
     private const SCHEMA_VERSION = '2026-03-01';
     private const DEFAULT_ENDPOINT = 'https://api.debugbundle.com/v1/events';
     private const DEFAULT_BATCH_SIZE = 25;
@@ -184,9 +184,19 @@ final class DebugBundleSdk
         if (
             $this->capturePolicy->captureLogs === 'off'
             || !$this->levelEnabled($normalizedLevel, $this->effectiveLogThreshold())
-            || !$this->passesSampleRate()
             || !$this->preAdmissionAllows('log_event', $normalizedLevel)
         ) {
+            return;
+        }
+
+        if (in_array($normalizedLevel, ['error', 'critical'], true) && ($context['exception'] ?? null) instanceof \Throwable) {
+            $error = $context['exception'];
+            unset($context['exception']);
+            $context['log_message'] = $message;
+            $this->captureException($error, $context);
+            return;
+        }
+        if (!$this->passesSampleRate()) {
             return;
         }
 

@@ -1,5 +1,7 @@
 # DebugBundle PHP SDK
 
+Patch 2.1.1 corrects native logger exception evidence and capture safety while preserving public APIs and event schemas. Upgrade the DebugBundle distribution to adopt the correction.
+
 PHP SDK for DebugBundle.
 
 `make evidence-performance` compares identical exception/recovery calls with

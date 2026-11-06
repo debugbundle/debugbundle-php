@@ -74,49 +74,56 @@ trait DebugBundleSdkExceptionCapture
 
         $this->capturedExceptions[$error] = true;
 
-        $redactedContext = $this->redactArray($context ?? []);
-        $reference = $this->supportsEvidence('recovery_v1') ? EvidenceWire::captureReference($redactedContext, $this->operations->scope()) : null;
-        $execution = $this->operations->snapshot();
-        $additional = [];
-        if ($reference !== null) $additional['evidence_reference'] = $reference;
-        if ($execution !== null) $additional['execution'] = $execution;
-        $maximum = ($runBeforeSend ? 32768 : 4096) - strlen(json_encode($additional, JSON_THROW_ON_ERROR)) - 64;
-        $captureSnapshot = ExceptionEvidence::snapshot($error, !$runBeforeSend, $maximum, $captureTrace);
-        $snapshot = $nativeFatal === null ? $captureSnapshot : ExceptionEvidence::fromFatal($nativeFatal, $maximum);
-        $message = $error->getMessage();
-        $payload = [
-            'name' => $error::class,
-            'message' => $message === '' ? $error::class : $message,
-            'stack' => ExceptionEvidence::legacyStack($error, $captureSnapshot),
-            'handled' => $handled,
-            'request' => $this->buildRequestPayload($redactedContext['request'] ?? null),
-            'response' => $this->buildResponsePayload($redactedContext['response'] ?? null),
-            'runtime' => $this->buildRuntimePayload(),
-        ];
-        if ($this->captureExceptionEvidence && $this->supportsEvidence('exception_evidence_v1')) {
-            $payload['exception_evidence'] = $snapshot;
-            if ($execution !== null) $payload['execution'] = $execution;
-        }
-
-        if ($this->probeFlushOnError) {
-            $probeData = $this->buildProbeData();
-            if ($probeData !== null) {
-                $payload['probe_data'] = $probeData;
+        // The temporary receipt also bounds recursive capture from beforeSend.
+        // Only an admitted event may keep it after this call returns.
+        $accepted = false;
+        try {
+            $redactedContext = $this->redactArray($context ?? []);
+            $reference = $this->supportsEvidence('recovery_v1') ? EvidenceWire::captureReference($redactedContext, $this->operations->scope()) : null;
+            $execution = $this->operations->snapshot();
+            $additional = [];
+            if ($reference !== null) $additional['evidence_reference'] = $reference;
+            if ($execution !== null) $additional['execution'] = $execution;
+            $maximum = ($runBeforeSend ? 32768 : 4096) - strlen(json_encode($additional, JSON_THROW_ON_ERROR)) - 64;
+            $captureSnapshot = ExceptionEvidence::snapshot($error, !$runBeforeSend, $maximum, $captureTrace);
+            $snapshot = $nativeFatal === null ? $captureSnapshot : ExceptionEvidence::fromFatal($nativeFatal, $maximum);
+            $message = $error->getMessage();
+            $payload = [
+                'name' => $error::class,
+                'message' => $message === '' ? $error::class : $message,
+                'stack' => ExceptionEvidence::legacyStack($error, $captureSnapshot),
+                'handled' => $handled,
+                'request' => $this->buildRequestPayload($redactedContext['request'] ?? null),
+                'response' => $this->buildResponsePayload($redactedContext['response'] ?? null),
+                'runtime' => $this->buildRuntimePayload(),
+            ];
+            if ($this->captureExceptionEvidence && $this->supportsEvidence('exception_evidence_v1')) {
+                $payload['exception_evidence'] = $snapshot;
+                if ($execution !== null) $payload['execution'] = $execution;
             }
-        }
 
-        $event = $this->baseEvent('backend_exception', $payload, $redactedContext);
-        if ($reference !== null) $event['context']['evidence_reference'] = $reference;
-        if ($runBeforeSend) {
-            $event = $this->applyBeforeSend($event);
-        }
-        if ($event === null) return;
-        if (!$this->passesSampleRate()) {
-            $this->releaseDiagnostic($event);
-            return;
-        }
+            if ($this->probeFlushOnError) {
+                $probeData = $this->buildProbeData();
+                if ($probeData !== null) {
+                    $payload['probe_data'] = $probeData;
+                }
+            }
 
-        $this->enqueueEvent($event);
+            $event = $this->baseEvent('backend_exception', $payload, $redactedContext);
+            if ($reference !== null) $event['context']['evidence_reference'] = $reference;
+            if ($runBeforeSend) {
+                $event = $this->applyBeforeSend($event);
+            }
+            if ($event === null) return;
+            if (!$this->passesSampleRate()) {
+                $this->releaseDiagnostic($event);
+                return;
+            }
+
+            $accepted = $this->enqueueEvent($event);
+        } finally {
+            if (!$accepted) unset($this->capturedExceptions[$error]);
+        }
     }
 
 }

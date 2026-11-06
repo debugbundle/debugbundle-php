@@ -1,6 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [2.1.1] - 2026-11-06
+
+- Final audit: release exception identity after rejected hooks, sampling or queue admission while keeping the recursive-hook guard.
+
+- Route Monolog/PSR-3 error records containing context.exception through native exception capture once, preserving causes and the log message. Reuse existing request identity and redaction safeguards.
+- Existing event schemas remain compatible; complete exception inputs may create new future fingerprints. Consumer installations require an explicit upgrade.
 
 ## [2.1.0] - 2026-11-01
 
