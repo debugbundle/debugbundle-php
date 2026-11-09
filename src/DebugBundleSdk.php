@@ -21,7 +21,7 @@ final class DebugBundleSdk
     use DebugBundleSdkEventBoundary;
 
     private const SDK_NAME = 'debugbundle/sdk-php';
-    private const SDK_VERSION = '2.1.1';
+    private const SDK_VERSION = '2.1.2';
     private const SCHEMA_VERSION = '2026-03-01';
     private const DEFAULT_ENDPOINT = 'https://api.debugbundle.com/v1/events';
     private const DEFAULT_BATCH_SIZE = 25;
