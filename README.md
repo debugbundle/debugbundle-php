@@ -500,7 +500,7 @@ retention ceilings. Memory measurements describe the PHP allocator, not cumulati
 allocation churn or total process RSS. `make smoke-fpm` separately verifies the
 existing request-end delivery deadline with evidence disabled and enabled.
 
-### Hook size limits (unreleased correction)
+### Hook size limits
 
 A hook replacement whose optional exception evidence exceeds the combined 32 KiB
 UTF-8 JSON budget keeps its replacement message and other primary fields. The SDK
