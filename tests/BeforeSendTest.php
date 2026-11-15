@@ -9,6 +9,36 @@ use PHPUnit\Framework\TestCase;
 
 final class BeforeSendTest extends TestCase
 {
+    public function testSharedHookByteBoundaries(): void
+    {
+        $corpus = json_decode((string) file_get_contents(__DIR__ . '/fixtures/before-send-budget.json'), true, 512, JSON_THROW_ON_ERROR);
+        foreach ($corpus['cases'] as $fixture) {
+            $result = BeforeSend::apply($corpus['original'], static fn (): array => $fixture['event']);
+            self::assertNotNull($result, $fixture['id']);
+            self::assertSame($fixture['outcome'] === 'fallback' ? 'owner removed' : 'owner replacement', $result['payload']['message'], $fixture['id']);
+            self::assertTrue(\DebugBundle\EvidenceWire::optionalEvidence($result));
+            if ($fixture['outcome'] === 'fallback') continue;
+            self::assertSame($fixture['outcome'] === 'keep', array_key_exists('exception_evidence', $result['payload']), $fixture['id']);
+            self::assertSame('preserved', $result['context']['owner_field']);
+            if (str_ends_with($fixture['id'], '-legacy')) self::assertArrayHasKey('evidence_reference', $result['context']);
+            if (str_ends_with($fixture['id'], '-typed') && $fixture['outcome'] === 'reduce') self::assertArrayNotHasKey('evidence_reference', $result['context']);
+        }
+    }
+
+    public function testCombinedEvidenceBudgetNeverRestoresOwnerRemovedContent(): void
+    {
+        $corpus = json_decode((string) file_get_contents(__DIR__ . '/fixtures/evidence-wire-cases.json'), true, 512, JSON_THROW_ON_ERROR);
+        $replacement = array_values(array_filter($corpus['events'], static fn (array $case): bool => $case['id'] === 'combined_optional_bytes'))[0]['event'];
+        $replacement['payload']['message'] = 'owner replacement';
+        $original = self::event('log_event', ['level' => 'error', 'message' => 'owner removed', 'attributes' => []]);
+        $result = BeforeSend::apply($original, static fn (): array => $replacement);
+        self::assertNotNull($result);
+        self::assertSame('owner replacement', $result['payload']['message']);
+        self::assertTrue(\DebugBundle\EvidenceWire::optionalEvidence($result));
+        self::assertArrayNotHasKey('exception_evidence', $result['payload']);
+        self::assertArrayHasKey('exception_evidence', $replacement['payload']);
+    }
+
     public function testAcceptsCanonicalUuidVersionsAndRejectsMalformedEnvelopeReplacements(): void
     {
         $original = self::event('log_event', ['level' => 'error', 'message' => 'original', 'attributes' => []]);
@@ -62,7 +92,13 @@ final class BeforeSendTest extends TestCase
             $candidate['sdk_version'] = 'hook-accepted';
             $result = BeforeSend::apply($original, static fn (): array => $candidate);
             self::assertNotNull($result);
-            self::assertSame($fixture['valid'], $result['sdk_version'] === 'hook-accepted', $fixture['id']);
+            // This corpus describes strict receiving validation. Local hooks
+            // reduce the aggregate byte-only case before that validation.
+            $accepted = $fixture['valid'] || in_array($fixture['id'], [
+                'combined_optional_bytes', 'numeric_budget_small_decimal_over',
+                'numeric_budget_small_exponent_over', 'numeric_budget_large_decimal_over',
+            ], true);
+            self::assertSame($accepted, $result['sdk_version'] === 'hook-accepted', $fixture['id']);
         }
     }
 

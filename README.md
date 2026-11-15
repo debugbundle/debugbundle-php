@@ -1,6 +1,6 @@
 # DebugBundle PHP SDK
 
-Patch 2.1.3 protects invitation and organisation-transfer credentials in captured text while preserving public APIs and event schemas. Upgrade the DebugBundle distribution to adopt the protection.
+Patch 2.1.4 preserves application hook redaction under optional-evidence limits and complete validation. Public capture APIs and event schemas remain compatible.
 
 PHP SDK for DebugBundle.
 
@@ -141,7 +141,7 @@ That command builds a Composer archive, installs the package into a fresh consum
 For published-package verification during release validation, run the same smoke path against Packagist:
 
 ```bash
-php smoke/run_app_driven_smoke.php --package debugbundle/sdk-php:2.1.3
+php smoke/run_app_driven_smoke.php --package debugbundle/sdk-php:2.1.4
 ```
 
 For a manual verification snippet inside your own app:
@@ -499,3 +499,13 @@ setup, and checks native previous causes, original-error priority and existing
 retention ceilings. Memory measurements describe the PHP allocator, not cumulative
 allocation churn or total process RSS. `make smoke-fpm` separately verifies the
 existing request-end delivery deadline with evidence disabled and enabled.
+
+### Hook size limits (unreleased correction)
+
+A hook replacement whose optional exception evidence exceeds the combined 32 KiB
+UTF-8 JSON budget keeps its replacement message and other primary fields. The SDK
+omits the oversized optional evidence and its typed reference, recording
+`context.evidence_limits`. Ordinary custom context remains intact. A size limit
+must not restore text removed by the hook; an otherwise valid replacement that
+cannot fit later ownership or transport limits is withheld. Malformed returns and
+throwing hooks retain the established protected-original fallback.

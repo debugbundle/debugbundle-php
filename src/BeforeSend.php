@@ -39,6 +39,7 @@ final class BeforeSend
             $owned = CanonicalEventSchema::project($owned);
             if (!is_array($owned)) return $event;
             foreach (['context', 'correlation'] as $key) if (($owned[$key] ?? null) instanceof \stdClass) $owned[$key] = (array) $owned[$key];
+            $owned = EvidenceWire::fitHookEvidence($owned);
             if (!EvidenceWire::optionalEvidence($owned)) return $event;
             if (($owned['event_type'] ?? null) === 'frontend_exception') {
                 $mobile = in_array($owned['sdk_name'], ['@debugbundle/sdk-android', '@debugbundle/sdk-swift', '@debugbundle/sdk-react-native'], true);

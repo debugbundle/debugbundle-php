@@ -87,7 +87,7 @@ final class EvidenceWire
             && ($value['limit_ms'] === null || self::number($value['limit_ms']));
     }
 
-    public static function graph(mixed $value): bool
+    public static function graph(mixed $value, bool $checkByteBudget = true): bool
     {
         if (!self::closed($value, ['version', 'runtime', 'root_id', 'nodes', 'truncated', 'unavailable_reason'])
             || !self::integer($value['version'], 1, 1) || !self::integer($value['root_id'], 0, 7)
@@ -123,7 +123,7 @@ final class EvidenceWire
             $nodes[(int) $node['id']] = $targets;
         }
         $visited = [];
-        return self::visit((int) $value['root_id'], $nodes, [], $visited, 0) && count($visited) === count($nodes) && self::bytes($value) <= 32768;
+        return self::visit((int) $value['root_id'], $nodes, [], $visited, 0) && count($visited) === count($nodes) && (!$checkByteBudget || self::bytes($value) <= 32768);
     }
 
     /**
@@ -164,7 +164,7 @@ final class EvidenceWire
     /** Historical arbitrary context remains open; only new payload fields opt in.
      * @param array<string, mixed> $event
      */
-    public static function optionalEvidence(array $event): bool
+    public static function optionalEvidence(array $event, bool $checkByteBudget = true): bool
     {
         $payload = $event['payload'] ?? null; if (!is_array($payload)) return false;
         if (($event['event_type'] ?? null) === 'diagnostic_context') {
@@ -178,14 +178,15 @@ final class EvidenceWire
             $allowed = (($event['event_type'] ?? null) === 'backend_exception' && $field !== 'resource_observations')
                 || (($event['event_type'] ?? null) === 'frontend_exception' && $field !== 'execution');
             if (!$allowed) return false;
-            if (!self::$validator($payload[$field])) return false;
+            $valid = $field === 'exception_evidence' ? self::graph($payload[$field], $checkByteBudget) : self::$validator($payload[$field]);
+            if (!$valid) return false;
             $added[$field] = $payload[$field];
         }
         if ($added === []) return true;
         $context = is_array($event['context'] ?? null) ? $event['context'] : [];
         $reference = self::reference($context['evidence_reference'] ?? null);
         if ($reference !== null) $added['evidence_reference'] = $reference;
-        return self::bytes($added) <= 32768;
+        return !$checkByteBudget || self::bytes($added) <= 32768;
     }
 
     /**
@@ -198,6 +199,29 @@ final class EvidenceWire
         $changed = false;
         foreach (['exception_evidence', 'execution', 'resource_observations'] as $field) if (array_key_exists($field, $event['payload'])) { unset($event['payload'][$field]); $changed = true; }
         return $changed ? $event : null;
+    }
+
+    /**
+     * @param array<string, mixed> $event
+     * @return array<string, mixed>
+     */
+    public static function fitHookEvidence(array $event): array
+    {
+        if (!in_array($event['event_type'] ?? null, ['backend_exception', 'frontend_exception'], true) || !is_array($event['payload'] ?? null)) return $event;
+        $added = array_intersect_key($event['payload'], array_flip(['exception_evidence', 'execution', 'resource_observations']));
+        if ($added === []) return $event;
+        $context = (array) ($event['context'] ?? []);
+        $reference = self::reference($context['evidence_reference'] ?? null);
+        if ($reference !== null) $added['evidence_reference'] = $reference;
+        if (self::bytes($added) <= 32768) return $event;
+        if (!self::optionalEvidence($event, false)) return $event;
+        $reduced = self::withoutOptional($event);
+        if ($reduced === null) return $event;
+        if ($reference !== null) unset($context['evidence_reference']);
+        unset($added['evidence_reference']);
+        $context['evidence_limits'] = ['version' => 1] + array_fill_keys(array_keys($added), 'budget_exceeded');
+        $reduced['context'] = $context;
+        return $reduced;
     }
 
     /**
