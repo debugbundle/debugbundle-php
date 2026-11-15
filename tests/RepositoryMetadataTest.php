@@ -157,7 +157,8 @@ final class RepositoryMetadataTest extends TestCase
 
         $readme = (string) file_get_contents($readmePath);
 
-        self::assertStringContainsString('## Configuration Reference', $readme);
+        self::assertStringContainsString('## Configuration', $readme);
+        self::assertStringContainsString('<a id="configuration-reference"></a>', $readme);
         self::assertStringContainsString('Configuration sources and precedence:', $readme);
         self::assertStringContainsString('Capture-policy fields are server-owned', $readme);
         self::assertStringContainsString('## Install Examples by Mode', $readme);
@@ -165,7 +166,7 @@ final class RepositoryMetadataTest extends TestCase
         self::assertStringContainsString('## Dependency Alignment', $readme);
         self::assertStringContainsString('## Service Naming', $readme);
         self::assertStringContainsString('## Safe Startup and Status', $readme);
-        self::assertStringContainsString('## First-Event Verification', $readme);
+        self::assertStringContainsString('## First-event verification', $readme);
         self::assertStringContainsString('make smoke', $readme);
         self::assertStringContainsString('same-origin', $readme);
         self::assertStringContainsString('allowed origins', $readme);
