@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace DebugBundle\Tests;
 
 use DebugBundle\DebugBundleSdk;
+use DebugBundle\Framework\HttpRateLimitContext;
 use DebugBundle\Framework\Laravel\DebugBundleMiddleware;
 use DebugBundle\Framework\Symfony\DebugBundleEventSubscriber;
 use DebugBundle\Tests\Support\FakeConfigFetcher;
@@ -25,6 +26,29 @@ use Symfony\Component\HttpKernel\HttpKernelInterface;
 final class HttpRateLimitContextTest extends TestCase
 {
     private ?DebugBundleSdk $sdk = null;
+
+    public function testRouteTemplatesStripQueryAndFragmentAndRejectInvalidValues(): void
+    {
+        self::assertSame('/gallery/{id}', HttpRateLimitContext::normalizeRouteTemplate('gallery/{id}#section?secret=value'));
+        self::assertSame('/' . str_repeat('x', 255), HttpRateLimitContext::normalizeRouteTemplate(str_repeat('x', 260)));
+        self::assertNull(HttpRateLimitContext::normalizeRouteTemplate('?secret=value'));
+        self::assertNull(HttpRateLimitContext::normalizeRouteTemplate("gallery\r/name"));
+        self::assertNull(HttpRateLimitContext::normalizeRouteTemplate(42));
+    }
+
+    public function testRateLimitHeaderValuesAreAllowlistedAndBounded(): void
+    {
+        self::assertSame([
+            'x-ratelimit-limit' => str_repeat('1', 128),
+            'x-ratelimit-reset' => '120',
+        ], HttpRateLimitContext::extractAllowedResponseHeaders([
+            'cookie=unsupported-index',
+            'Retry-After' => "5\r\nInjected: value",
+            'X-RateLimit-Limit' => str_repeat('1', 130),
+            'X-RateLimit-Remaining' => [],
+            'X-RateLimit-Reset' => [null, '', 120],
+        ]));
+    }
 
     protected function tearDown(): void
     {

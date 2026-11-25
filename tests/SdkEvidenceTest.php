@@ -81,6 +81,48 @@ final class SdkEvidenceTest extends TestCase
         self::assertSame(200, $event['payload']['status_code']);
     }
 
+    public function testProtectsResourceEvidenceAndTypedLimitsAddedByTheCaptureHook(): void
+    {
+        $sourceUrl = 'https://cdn.example/script.js';
+        $transport = $this->fixture([
+            'evidenceCapabilities' => ['version' => 1, 'features' => ['resource_observations_v1', 'evidence_provenance_v1']],
+            'redactExactFields' => ['privatebit'],
+            'redactFields' => ['source_url', 'evidence_limits'],
+            'beforeSend' => static function (array $event) use ($sourceUrl): array {
+                $event['event_type'] = 'frontend_exception';
+                $event['payload'] = [
+                    'name' => 'Error',
+                    'message' => 'resource failed ' . $sourceUrl . '?privatebit=hidden-value&visible=1',
+                    'stack' => 'Error: resource failed',
+                    'browser' => ['name' => 'fixture', 'version' => '1'],
+                    'resource_observations' => ['version' => 1, 'items' => [[
+                        'kind' => 'timing',
+                        'observed_at' => $event['occurred_at'],
+                        'source_url' => $sourceUrl,
+                        'availability' => 'observed',
+                        'response_status' => 429,
+                        'duration_ms' => 12,
+                        'transfer_size_bytes' => 0,
+                    ]]],
+                ];
+                $event['context'] = ['evidence_limits' => ['version' => 1, 'exception_evidence' => 'budget_exceeded']];
+                return $event;
+            },
+        ]);
+        $this->sdk->captureException(new \RuntimeException('synthetic failure'));
+        $this->sdk->flush();
+
+        self::assertCount(1, $transport->requests);
+        $event = $transport->requests[0]['events'][0];
+        self::assertSame('frontend_exception', $event['event_type']);
+        $observation = $event['payload']['resource_observations']['items'][0];
+        self::assertSame(429, $observation['response_status']);
+        self::assertSame($sourceUrl, $observation['source_url']);
+        self::assertStringNotContainsString('hidden-value', $event['payload']['message']);
+        self::assertStringContainsString('visible=1', $event['payload']['message']);
+        self::assertSame(['version' => 1, 'exception_evidence' => 'budget_exceeded'], $event['context']['evidence_limits']);
+    }
+
     public function testKeepsFatalNativeSourceSeparateAndBypassesApplicationHook(): void
     {
         $calls = 0; $transport = $this->fixture(['evidenceCapabilities' => self::PROOF,
