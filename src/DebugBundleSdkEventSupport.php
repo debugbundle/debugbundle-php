@@ -193,6 +193,26 @@ trait DebugBundleSdkEventSupport
         return $fields;
     }
 
+    /** @param list<string>|mixed $exactFields
+     *  @return array<string, bool>
+     */
+    private function buildRedactExactFields(mixed $exactFields): array
+    {
+        $fields = [];
+        if (is_array($exactFields)) {
+            foreach ($exactFields as $field) {
+                if (is_string($field)) {
+                    $trimmed = trim($field);
+                    if ($trimmed !== '') {
+                        $fields[strtolower($trimmed)] = true;
+                    }
+                }
+            }
+        }
+
+        return $fields;
+    }
+
     /**
      * @param array<string, mixed> $value
      * @return array<string, mixed>
@@ -200,7 +220,7 @@ trait DebugBundleSdkEventSupport
     private function redactArray(array $value): array
     {
         /** @var array<string, mixed> $redacted */
-        $redacted = Redaction::redactValue($value, $this->redactFields);
+        $redacted = Redaction::redactValue($value, $this->redactFields, $this->redactExactFields);
         return $redacted;
     }
 

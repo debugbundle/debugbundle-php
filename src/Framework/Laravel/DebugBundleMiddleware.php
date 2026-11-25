@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace DebugBundle\Framework\Laravel;
 
 use DebugBundle\DebugBundleSdk;
+use DebugBundle\Framework\HttpRateLimitContext;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 
 final class DebugBundleMiddleware
 {
@@ -32,9 +34,19 @@ final class DebugBundleMiddleware
         try {
             $response = $next($request);
         } catch (\Throwable $error) {
-            $this->sdk->captureException($error, [
-                'request' => $normalizedRequest,
-            ]);
+            $postRoutingRequest = $this->normalizeRequest($request);
+            if ($error instanceof HttpExceptionInterface && $error->getStatusCode() === 429) {
+                $this->captureRateLimitRequest(
+                    $request,
+                    $postRoutingRequest,
+                    $error->getHeaders(),
+                    (int) round(($this->now() - $startedAt) * 1000)
+                );
+            } else {
+                $this->sdk->captureException($error, [
+                    'request' => $postRoutingRequest,
+                ]);
+            }
             throw $error;
         } finally {
             if (!isset($response) || !$response instanceof Response) {
@@ -43,13 +55,22 @@ final class DebugBundleMiddleware
         }
 
         if ($response instanceof Response) {
-            $this->sdk->captureRequest(
-                $normalizedRequest,
-                [
-                    'status_code' => $response->getStatusCode(),
-                    'duration_ms' => (int) round(($this->now() - $startedAt) * 1000),
-                ]
-            );
+            $postRoutingRequest = $this->normalizeRequest($request);
+            $statusCode = $response->getStatusCode();
+            $durationMs = (int) round(($this->now() - $startedAt) * 1000);
+            if ($statusCode === 429) {
+                $this->captureRateLimitRequest($request, $postRoutingRequest, $response->headers->all(), $durationMs);
+            } else {
+                $responseHeaders = HttpRateLimitContext::extractAllowedResponseHeaders($response->headers->all());
+                $this->sdk->captureRequest(
+                    $postRoutingRequest,
+                    [
+                        'status_code' => $statusCode,
+                        'duration_ms' => $durationMs,
+                        ...($responseHeaders !== [] ? ['response_headers' => $responseHeaders] : []),
+                    ]
+                );
+            }
         }
 
         $this->sdk->endRequest($request);
@@ -57,14 +78,39 @@ final class DebugBundleMiddleware
         return $response;
     }
 
+    /**
+     * @param array<string, mixed> $normalizedRequest
+     * @param array<int|string, mixed> $rawHeaders
+     */
+    private function captureRateLimitRequest(
+        Request $request,
+        array $normalizedRequest,
+        array $rawHeaders,
+        int $durationMs
+    ): void {
+        $responseHeaders = HttpRateLimitContext::extractAllowedResponseHeaders($rawHeaders);
+        $limiter = HttpRateLimitContext::extractLaravelRateLimiter($request);
+        $this->sdk->captureRequest(
+            $normalizedRequest,
+            [
+                'status_code' => 429,
+                'duration_ms' => $durationMs,
+                ...($responseHeaders !== [] ? ['response_headers' => $responseHeaders] : []),
+            ],
+            $limiter !== null ? ['rate_limiter' => $limiter] : null
+        );
+    }
+
     /** @return array<string, mixed> */
     private function normalizeRequest(Request $request): array
     {
+        $routeTemplate = HttpRateLimitContext::extractLaravelRouteTemplate($request);
         return [
             'method' => $request->getMethod(),
             'path' => $request->getPathInfo(),
             'query' => $request->query->all(),
             'headers' => $request->headers->all(),
+            ...($routeTemplate !== null ? ['route_template' => $routeTemplate] : []),
         ];
     }
 

@@ -78,8 +78,9 @@ trait DebugBundleSdkExceptionCapture
         // Only an admitted event may keep it after this call returns.
         $accepted = false;
         try {
-            $redactedContext = $this->redactArray($context ?? []);
-            $reference = $this->supportsEvidence('recovery_v1') ? EvidenceWire::captureReference($redactedContext, $this->operations->scope()) : null;
+            $rawContext = $context ?? [];
+            $reference = $this->supportsEvidence('recovery_v1') ? EvidenceWire::captureReference($rawContext, $this->operations->scope()) : null;
+            $redactedContext = $this->redactArray($rawContext);
             $execution = $this->operations->snapshot();
             $additional = [];
             if ($reference !== null) $additional['evidence_reference'] = $reference;

@@ -18,23 +18,37 @@ final class TelemetryPrivacy
         'cardnumber', 'cvv', 'cvc', 'pin', 'expiry', 'phone', 'otp', 'verificationcode',
     ];
 
-    /** @param array<string, bool> $additionalFields */
-    public static function protect(mixed $value, array $additionalFields = []): mixed
+    /** @param array<string, bool> $additionalFields
+     *  @param array<string, bool> $exactFields
+     */
+    public static function protect(mixed $value, array $additionalFields = [], array $exactFields = []): mixed
     {
-        if (count($additionalFields) > 128) {
+        if (count($additionalFields) + count($exactFields) > 128) {
             throw new \InvalidArgumentException('unsafe_input');
         }
         $keys = array_fill_keys(self::KEYS, true);
         foreach (array_keys($additionalFields) as $field) {
-            if ($field === '' || strlen($field) > 64) {
+            if (trim($field) === '' || strlen($field) > 64) {
                 throw new \InvalidArgumentException('unsafe_input');
             }
             $keys[self::canonical($field)] = true;
         }
+        /** @var array<string, bool> $exactMap */
+        $exactMap = [];
+        /** @var list<string> $exactList */
+        $exactList = [];
+        foreach (array_keys($exactFields) as $field) {
+            if (trim($field) === '' || strlen($field) > 64) {
+                throw new \InvalidArgumentException('unsafe_input');
+            }
+            $trimmed = trim($field);
+            $exactMap[strtolower($trimmed)] = true;
+            $exactList[] = $trimmed;
+        }
 
         $nodes = 0;
         $bytes = 0;
-        $result = self::visit($value, $keys, array_keys($additionalFields), 0, $nodes, $bytes, true);
+        $result = self::visit($value, $keys, array_keys($additionalFields), $exactMap, $exactList, 0, $nodes, $bytes, true);
         $encoded = json_encode($result, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE);
         if (strlen($encoded) > self::MAX_BYTES) {
             throw new \InvalidArgumentException('budget_exceeded');
@@ -44,8 +58,9 @@ final class TelemetryPrivacy
 
     /** @param array<string, mixed> $event
      *  @param array<string, bool> $extra
+     *  @param array<string, bool> $exact
      */
-    public static function hasSafeEventIdentity(array $event, array $extra = []): bool
+    public static function hasSafeEventIdentity(array $event, array $extra = [], array $exact = []): bool
     {
         $correlation = $event['correlation'] ?? [];
         if (!is_array($correlation) || count($correlation) > 8) {
@@ -56,7 +71,7 @@ final class TelemetryPrivacy
             $values[] = $event[$field] ?? null;
         }
         foreach ($values as $value) {
-            if ($value !== null && (!is_string($value) || self::protect($value, $extra) !== $value)) {
+            if ($value !== null && (!is_string($value) || self::protect($value, $extra, $exact) !== $value)) {
                 return false;
             }
         }
@@ -68,11 +83,32 @@ final class TelemetryPrivacy
         return strtolower((string) preg_replace('/[^a-z0-9]/i', '', $key));
     }
 
+    /** @param array<string, bool> $exactMap */
+    private static function exactSensitiveKey(string $key, array $exactMap): bool
+    {
+        if ($exactMap === []) {
+            return false;
+        }
+
+        return isset($exactMap[strtolower(trim($key))]);
+    }
+
     /** @param array<string, bool> $keys
      *  @param list<string> $extra
+     *  @param array<string, bool> $exactMap
+     *  @param list<string> $exact
      */
-    private static function visit(mixed $value, array $keys, array $extra, int $depth, int &$nodes, int &$bytes, bool $structured): mixed
-    {
+    private static function visit(
+        mixed $value,
+        array $keys,
+        array $extra,
+        array $exactMap,
+        array $exact,
+        int $depth,
+        int &$nodes,
+        int &$bytes,
+        bool $structured
+    ): mixed {
         if (++$nodes > 4096) {
             throw new \InvalidArgumentException('budget_exceeded');
         }
@@ -92,14 +128,14 @@ final class TelemetryPrivacy
                 try {
                     $parsed = json_decode($value, true, 17, JSON_THROW_ON_ERROR);
                     if (is_array($parsed)) {
-                        $cleaned = self::visit($parsed, $keys, $extra, 0, $nodes, $bytes, false);
+                        $cleaned = self::visit($parsed, $keys, $extra, $exactMap, $exact, 0, $nodes, $bytes, false);
                         return json_encode($cleaned, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
                     }
                 } catch (\JsonException) {
                     // Recognizable credentials in malformed structured data are withheld below.
                 }
             }
-            $cleaned = self::scrubText($value, $keys, $extra);
+            $cleaned = self::scrubText($value, $keys, $extra, $exactMap, $exact);
             if ($cleaned === $value && (str_starts_with($value, '{') || str_starts_with($value, '['))
                 && preg_match('/(?:password|token|secret|authorization|cookie)["\']?\s*[:=]/i', $value) === 1) {
                 return self::REDACTED;
@@ -119,15 +155,15 @@ final class TelemetryPrivacy
                     }
                     $bytes += strlen($key);
                     self::checkBudget($bytes);
-                    if (self::scrubText($key, $keys, $extra) !== $key) {
+                    if (self::scrubText($key, $keys, $extra, $exactMap, $exact) !== $key) {
                         continue;
                     }
-                    if (self::sensitiveKey($key, $keys)) {
+                    if (self::sensitiveKey($key, $keys) || self::exactSensitiveKey($key, $exactMap)) {
                         $result[$key] = self::REDACTED;
                         continue;
                     }
                 }
-                $result[$key] = self::visit($nested, $keys, $extra, $depth + 1, $nodes, $bytes, $structured);
+                $result[$key] = self::visit($nested, $keys, $extra, $exactMap, $exact, $depth + 1, $nodes, $bytes, $structured);
             }
             return $value instanceof \stdClass ? (object) $result : $result;
         }
@@ -165,9 +201,17 @@ final class TelemetryPrivacy
 
     /** @param array<string, bool> $keys
      *  @param list<string> $extra
+     *  @param array<string, bool> $exactMap
+     *  @param list<string> $exact
      */
-    private static function scrubText(string $text, array $keys, array $extra, bool $scanUrls = true): string
-    {
+    private static function scrubText(
+        string $text,
+        array $keys,
+        array $extra,
+        array $exactMap,
+        array $exact,
+        bool $scanUrls = true
+    ): string {
         if (preg_match('/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i', $text) === 1
             && preg_match('/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i', $text) !== 1) {
             return self::REDACTED;
@@ -183,6 +227,13 @@ final class TelemetryPrivacy
         $text = (string) preg_replace('/\b(' . $labels . ')\b(["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s&,;]+)/i', '$1$2[REDACTED]', $text);
         foreach ($extra as $field) {
             $text = (string) preg_replace('/\b(' . preg_quote($field, '/') . ')\b(["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s&,;]+)/i', '$1$2[REDACTED]', $text);
+        }
+        foreach ($exact as $field) {
+            $text = (string) preg_replace(
+                '/(?<![A-Za-z0-9_-])(' . preg_quote($field, '/') . ')(?![A-Za-z0-9_-])(["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s&,;]+)/i',
+                '$1$2[REDACTED]',
+                $text
+            );
         }
         $text = (string) preg_replace_callback('/(?<![A-Za-z0-9_-])(?:[0-9][ -]?){12,18}[0-9](?![A-Za-z0-9_-])/', static function (array $match): string {
             $digits = preg_replace('/[^0-9]/', '', $match[0]);
@@ -205,7 +256,7 @@ final class TelemetryPrivacy
         if (!$scanUrls) {
             return $text;
         }
-        return (string) preg_replace_callback('/\bhttps?:\/\/[^\s<>"\']+/i', static function (array $match) use ($keys, $extra): string {
+        return (string) preg_replace_callback('/\bhttps?:\/\/[^\s<>"\']+/i', static function (array $match) use ($keys, $extra, $exactMap, $exact): string {
             $raw = rtrim($match[0], ').,;');
             $suffix = substr($match[0], strlen($raw));
             $parts = parse_url($raw);
@@ -223,10 +274,16 @@ final class TelemetryPrivacy
                     [$name, $value] = array_pad(explode('=', $pair, 2), 2, '');
                     $key = urldecode($name);
                     $decoded = urldecode($value);
-                    if (strlen($key) > 128 || self::scrubText($key, $keys, $extra, false) !== $key) {
+                    if (strlen($key) > 128 || self::scrubText($key, $keys, $extra, $exactMap, $exact, false) !== $key) {
                         continue;
                     }
-                    $pairs[] = rawurlencode($key) . '=' . rawurlencode(self::sensitiveKey($key, $keys) || self::scrubText($decoded, $keys, $extra, false) !== $decoded ? self::REDACTED : $decoded);
+                    $pairs[] = rawurlencode($key) . '=' . rawurlencode(
+                        self::sensitiveKey($key, $keys)
+                        || self::exactSensitiveKey($key, $exactMap)
+                        || self::scrubText($decoded, $keys, $extra, $exactMap, $exact, false) !== $decoded
+                            ? self::REDACTED
+                            : $decoded
+                    );
                 }
                 $url .= '?' . implode('&', $pairs);
             }

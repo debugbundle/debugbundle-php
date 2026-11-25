@@ -76,6 +76,9 @@ final class DebugBundleSdk
     /** @var array<string, bool> */
     private array $redactFields = [];
 
+    /** @var array<string, bool> */
+    private array $redactExactFields = [];
+
     /** @var list<array<string, mixed>> */
     private array $buffer = [];
 
@@ -101,6 +104,7 @@ final class DebugBundleSdk
         $this->suppression = new Suppression();
         $this->capturedExceptions = new \WeakMap();
         $this->redactFields = $this->buildRedactFields(null);
+        $this->redactExactFields = [];
         $this->capturePolicy = RemoteConfig::balancedCapturePolicy();
         $this->processStartedAtNs = hrtime(true);
         $this->operations = new OperationContext();
@@ -123,6 +127,7 @@ final class DebugBundleSdk
         $this->maxProbeLabels = max(1, (int) ($config['maxProbeLabels'] ?? 50));
         $this->maxProbeEntriesPerLabel = max(1, (int) ($config['maxProbeEntriesPerLabel'] ?? 10));
         $this->redactFields = $this->buildRedactFields($config['redactFields'] ?? null);
+        $this->redactExactFields = $this->buildRedactExactFields($config['redactExactFields'] ?? null);
         $this->buffer = [];
         $this->bufferBytes = 0;
         $this->bufferPriorities = [0, 0, 0, 0];
@@ -240,6 +245,26 @@ final class DebugBundleSdk
             'duration_ms' => isset($redactedResponse['duration_ms']) ? max(0, (int) $redactedResponse['duration_ms']) : 0,
         ];
 
+        $rawRouteTemplate = $redactedRequest['route_template'] ?? ($redactedContext['route_template'] ?? null);
+        if (is_string($rawRouteTemplate)) {
+            $trimmedTemplate = trim($rawRouteTemplate);
+            if ($trimmedTemplate !== '' && preg_match('/[\x00-\x1F\x7F]/', $trimmedTemplate) !== 1) {
+                $payload['route_template'] = strlen($trimmedTemplate) > 256
+                    ? substr($trimmedTemplate, 0, 256)
+                    : $trimmedTemplate;
+            }
+        }
+
+        $rawResponseHeaders = is_array($response['response_headers'] ?? null)
+            ? $response['response_headers']
+            : (is_array($response['headers'] ?? null) ? $response['headers'] : null);
+        if ($rawResponseHeaders !== null) {
+            $allowedHeaders = Framework\HttpRateLimitContext::extractAllowedResponseHeaders($rawResponseHeaders);
+            if ($allowedHeaders !== []) {
+                $payload['response_headers'] = $this->normalizeMap($this->redactArray($allowedHeaders));
+            }
+        }
+
         $event = $this->applyBeforeSend($this->baseEvent('request_event', $payload, $redactedContext));
         if ($event === null) {
             return;
@@ -257,7 +282,7 @@ final class DebugBundleSdk
     public function setContext(string $key, mixed $value): void
     {
         try {
-            $protected = TelemetryPrivacy::protect([$key => $value], $this->redactFields);
+            $protected = TelemetryPrivacy::protect([$key => $value], $this->redactFields, $this->redactExactFields);
             if (is_array($protected) && array_key_exists($key, $protected)) {
                 $this->context[$key] = $protected[$key];
             }
@@ -295,8 +320,8 @@ final class DebugBundleSdk
         }
 
         try {
-            $redactedValue = TelemetryPrivacy::protect($value, $this->redactFields);
-            $label = TelemetryPrivacy::protect($label, $this->redactFields);
+            $redactedValue = TelemetryPrivacy::protect($value, $this->redactFields, $this->redactExactFields);
+            $label = TelemetryPrivacy::protect($label, $this->redactFields, $this->redactExactFields);
             if (!is_array($redactedValue) || !is_string($label)) {
                 return;
             }
@@ -651,6 +676,8 @@ final class DebugBundleSdk
         $this->bufferPriorities = [0, 0, 0, 0];
         $this->pressureDrops = [];
         $this->context = [];
+        $this->redactFields = $this->buildRedactFields(null);
+        $this->redactExactFields = [];
         $this->probeBuffers = [];
         $this->transport = $this->transportOverride;
         $this->retryAfter = 0.0;

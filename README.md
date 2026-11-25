@@ -70,6 +70,8 @@ DebugBundle::probe('checkout.cart', ['item_count' => count($cart->items)]);
 
 Example apps live in `examples/laravel` and `examples/symfony`.
 
+Laravel (`DebugBundleMiddleware`) and Symfony (`DebugBundleEventSubscriber`) capture the matched post-routing `route_template` and, on HTTP 429 responses or thrown `HttpExceptionInterface` 429 exceptions, strictly allowlisted rate-limit `response_headers` (`retry-after`, `x-ratelimit-limit`, `x-ratelimit-remaining`, `x-ratelimit-reset`) without duplicate capture. Laravel middleware also records a bounded static `rate_limiter` context label only when an unambiguous static `throttle:<name>` middleware is configured on the matched route; dynamic bucket keys, client IPs, and user identifiers are never emitted.
+
 ### Browser Relay
 
 PHP backends can host the browser relay endpoint used by `@debugbundle/sdk-browser`.
@@ -188,7 +190,8 @@ Configuration sources and precedence:
 | `logLevel` | `warning` | Minimum captured log severity. |
 | `sampleRate` | `1.0` | Fraction of events to keep before transport. |
 | `batchSize` | `25` | Events per batch before flushing. |
-| `redactFields` | common sensitive fields | Additional field names to redact. |
+| `redactFields` | common sensitive fields | Additional field names to redact (broad segment-aware matching; additive to mandatory credential rules). |
+| `redactExactFields` | `[]` | Additional exact field/query-parameter names to redact (ASCII case-insensitive whole-key matching, punctuation significant; e.g. `tag` masks `tag` without masking `tag_name`). Additive to mandatory credential rules and shares the 128-key / 64-char custom limit with `redactFields`. |
 | `maxProbeLabels` | `50` | Maximum distinct probe labels buffered in memory. |
 | `maxProbeEntriesPerLabel` | `10` | Maximum entries retained per probe label. |
 | `probeFlushOnError` | `true` | Attach buffered probe data to captured exceptions. |

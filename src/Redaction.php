@@ -19,16 +19,20 @@ final class Redaction
         'token',
     ];
 
-    /** @param array<string, bool> $redactFields */
-    public static function redactValue(mixed $value, array $redactFields): mixed
+    /** @param array<string, bool> $redactFields
+     *  @param array<string, bool> $exactFields
+     */
+    public static function redactValue(mixed $value, array $redactFields, array $exactFields = []): mixed
     {
         $nodes = 0;
         $bytes = 0;
-        return self::visit($value, $redactFields, 0, $nodes, $bytes);
+        return self::visit($value, $redactFields, $exactFields, 0, $nodes, $bytes);
     }
 
-    /** @param array<string, bool> $redactFields */
-    private static function visit(mixed $value, array $redactFields, int $depth, int &$nodes, int &$bytes): mixed
+    /** @param array<string, bool> $redactFields
+     *  @param array<string, bool> $exactFields
+     */
+    private static function visit(mixed $value, array $redactFields, array $exactFields, int $depth, int &$nodes, int &$bytes): mixed
     {
         // Bound the compatibility key pass before the mandatory privacy visitor.
         // In particular, PHP arrays can contain references back to themselves.
@@ -41,12 +45,12 @@ final class Redaction
             if (count($value) > 256) return [];
             $redacted = [];
             foreach ($value as $key => $nestedValue) {
-                if (is_string($key) && isset($redactFields[strtolower($key)])) {
+                if (is_string($key) && (isset($redactFields[strtolower($key)]) || isset($exactFields[strtolower(trim($key))]))) {
                     $redacted[$key] = self::REDACTED_VALUE;
                     continue;
                 }
 
-                $redacted[$key] = self::visit($nestedValue, $redactFields, $depth + 1, $nodes, $bytes);
+                $redacted[$key] = self::visit($nestedValue, $redactFields, $exactFields, $depth + 1, $nodes, $bytes);
             }
 
             return $redacted;
